@@ -1,0 +1,6 @@
+{
+  "image_directory": "F:/Data/Project/OCR-Proj/demo/imges",
+  "output_directory": "output",
+  "auto_detect": false,
+  "camera_id": 0
+}
