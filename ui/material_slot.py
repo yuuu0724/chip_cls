@@ -1,6 +1,4 @@
-"""
-单个料位组件模块 - 全背景色填充设计
-"""
+"""单个料位组件模块 - 全背景色填充设计"""
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
@@ -56,9 +54,9 @@ class MaterialSlot(QFrame):
         """设置检测结果 - 全背景色填充"""
         # 高饱和度实色映射表
         bg_colors = {
-            "green": "#1a7e1a",      # 墨绿色 - 正常 RGB(26, 126, 26)
-            "red": "#c41e1e",        # 鲜红色 - 错误 RGB(196, 30, 30)
-            "yellow": "#d99d0f",     # 琥珀色 - 警告 RGB(217, 157, 15)
+            "green": "#1a7e1a",      # 墨绿色 - 正常
+            "red": "#c41e1e",        # 鲜红色 - 错误
+            "yellow": "#d99d0f",     # 琥珀色 - 警告
             "default": "#2a2a2e"     # 灰色
         }
         

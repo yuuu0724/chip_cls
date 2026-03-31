@@ -1,5 +1,6 @@
-# ocr_engine.py
+"""OCR 引擎 - 基于 PaddleX 的文本识别"""
 from paddlex import create_pipeline
+
 
 class OCREngine:
     def __init__(self):
@@ -11,9 +12,9 @@ class OCREngine:
             for res in output:
                 # 获取文字、角度以及对应的置信度分数
                 raw_texts = res.get("rec_texts", [])
-                raw_scores = res.get("rec_scores", []) # 关键：获取每个词的分数
+                raw_scores = res.get("rec_scores", [])  # 关键：获取每个词的分数
                 
-                # 过滤：只有置信度 > 0. 且长度 > 1 的才保留
+                # 过滤：只有置信度 > 0.5 且长度 > 2 的才保留
                 valid_texts = []
                 for text, score in zip(raw_texts, raw_scores):
                     if score > 0.5 and len(text.strip()) > 2:

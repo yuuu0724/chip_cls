@@ -1,9 +1,7 @@
-"""
-背景检测线程模块
-"""
+"""背景检测线程模块"""
 import os
 from PySide6.QtCore import QThread, Signal
-from logic_controller import MaterialController
+from ocr import MaterialController
 
 
 class ControlWorker(QThread):

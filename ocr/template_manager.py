@@ -1,7 +1,9 @@
-# template_manager.py
+"""模板管理器 - 管理和维护 OCR 模板"""
 import json
 import os
-from ocr_engine import OCREngine
+import re
+from .engine import OCREngine
+
 
 class TemplateManager:
     """
@@ -9,7 +11,9 @@ class TemplateManager:
     保存格式：{'型号': {'angle': 90, 'description': '标准方向'}}
     """
     
-    def __init__(self, template_file="templates.json"):
+    def __init__(self, template_file=None):
+        if template_file is None:
+            template_file = os.path.join(os.path.dirname(__file__), "..", "config", "templates.json")
         self.template_file = template_file
         self.templates = self.load_templates()
         self.engine = OCREngine()
@@ -28,6 +32,7 @@ class TemplateManager:
     def save_templates(self):
         """保存模板到 JSON 文件"""
         try:
+            os.makedirs(os.path.dirname(self.template_file), exist_ok=True)
             with open(self.template_file, 'w', encoding='utf-8') as f:
                 json.dump(self.templates, f, ensure_ascii=False, indent=2)
             return True
@@ -62,7 +67,6 @@ class TemplateManager:
                 # 提取纯字母数字部分作为推荐的模板名
                 raw_text = detected_texts[0][:20]  # 限制长度
                 # 尝试提取字母和数字（去掉特殊字符）
-                import re
                 alphanumeric = re.sub(r'[^A-Za-z0-9]', '', raw_text)
                 detected_model = alphanumeric if alphanumeric else raw_text
             

@@ -1,6 +1,4 @@
-"""
-应用配置管理器 - 管理用户配置和设置
-"""
+"""应用配置管理器 - 管理用户配置和设置"""
 import json
 import os
 from pathlib import Path
@@ -9,7 +7,7 @@ from pathlib import Path
 class ConfigManager:
     """应用配置管理器"""
     
-    CONFIG_FILE = "app_config.json"
+    CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "app_config.json")
     
     DEFAULT_CONFIG = {
         "image_directory": None,  # 用户指定的图像目录
@@ -37,6 +35,7 @@ class ConfigManager:
     def save_config(self):
         """保存配置到文件"""
         try:
+            os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
             with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
         except Exception as e:

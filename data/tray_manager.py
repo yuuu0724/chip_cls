@@ -1,6 +1,7 @@
-# tray_manager.py
+"""料盘配置管理模块"""
 import json
 import os
+
 
 class TrayManager:
     """
@@ -8,7 +9,9 @@ class TrayManager:
     每个料盘可以装入不同型号的芯片
     """
     
-    def __init__(self, config_file="trays_config.json"):
+    def __init__(self, config_file=None):
+        if config_file is None:
+            config_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "trays_config.json")
         self.config_file = config_file
         self.trays = self.load_trays()
     
@@ -52,6 +55,7 @@ class TrayManager:
     def save_trays(self):
         """保存料盘配置"""
         try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.trays, f, ensure_ascii=False, indent=2)
             return True

@@ -1,6 +1,4 @@
-"""
-模板确认对话框模块
-"""
+"""对话框组件模块"""
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                                QLineEdit, QSpinBox, QPushButton, QTextEdit)
 

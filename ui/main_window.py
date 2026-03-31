@@ -1,3 +1,4 @@
+"""主应用窗口 - AI 芯片料盘视觉检测系统"""
 import sys
 import os
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
@@ -7,19 +8,13 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QPixmap
 
-# 导入项目本地模块
-from ocr_engine import OCREngine
-from logic_controller import MaterialController
-from data_logger import DataLogger
-from template_manager import TemplateManager
-from tray_manager import TrayManager
-from config_manager import ConfigManager
+# 导入项目本地模块（使用绝对导入）
+from ocr import OCREngine, TemplateManager, MaterialController
+from data import DataLogger, ConfigManager, TrayManager
+from workers import CameraWorker, ControlWorker
+from .material_slot import MaterialSlot
+from .dialogs import TemplateConfirmDialog
 
-# 导入新的独立模块
-from camera_worker import CameraWorker
-from control_worker import ControlWorker
-from material_slot import MaterialSlot
-from template_confirm_dialog import TemplateConfirmDialog
 
 # --- 主界面 ---
 class OCRApp(QMainWindow):
@@ -134,24 +129,23 @@ class OCRApp(QMainWindow):
         
         left_layout.addLayout(top_control_layout)
         
-        # --- 料位网格区 (3行7列) - 优化大小 ---
+        # --- 料位网格区 (3行7列) ---
         grid_container = QWidget()
         grid_container.setStyleSheet("background-color: #1a1f2e;")
         self.grid_layout = QGridLayout(grid_container)
         self.grid_layout.setSpacing(12)
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # 顶部对齐确保对称
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         for i in range(21):
             slot = MaterialSlot(i + 1)
             slot.setMinimumSize(70, 70)
-            # 不设置 MaximumSize，让槽位自动拉伸
             row = i // 7
             col = i % 7
             self.grid_layout.addWidget(slot, row, col)
             self.slots.append(slot)
         
-        left_layout.addWidget(grid_container, 1)  # 伸缩因子为1，自动填充空间  # 伸缩因子为1，自动填充空间
+        left_layout.addWidget(grid_container, 1)
         
         # ========== 右侧：三个分区布局 ==========
         right_layout = QVBoxLayout()
@@ -174,7 +168,7 @@ class OCRApp(QMainWindow):
         
         # 摄像头预览 - 无缝全填充
         self.camera_frame = QLabel()
-        self.camera_frame.setScaledContents(True)  # 自动缩放适配
+        self.camera_frame.setScaledContents(True)
         self.camera_frame.setStyleSheet("""
             background-color: #0a0e1a;
             border: none;
@@ -187,7 +181,7 @@ class OCRApp(QMainWindow):
         # 启动摄像头预览
         self.start_camera_preview()
         
-        right_layout.addWidget(camera_section, 1) # 伸缩因子为1
+        right_layout.addWidget(camera_section, 1)
         
         # ========== 区域2：参数设置区（中间） ==========
         param_section = QFrame()
@@ -308,7 +302,7 @@ class OCRApp(QMainWindow):
         angle_edit_layout.addWidget(self.angle_input)
         param_section_layout.addLayout(angle_edit_layout)
         
-        right_layout.addWidget(param_section, 2) # 伸缩因子为2
+        right_layout.addWidget(param_section, 2)
         
         # ========== 区域3：检测按钮区（底部） ==========
         button_section = QFrame()
@@ -329,7 +323,7 @@ class OCRApp(QMainWindow):
         button_title.setStyleSheet("color: #007AFF; font-size: 17px; font-weight: 300; letter-spacing: 0.5px;")
         button_section_layout.addWidget(button_title)
         
-        # 启动检测按钮 - 强化蓝色发光质感
+        # 启动检测按钮
         self.start_btn = QPushButton("开始检测")
         self.start_btn.setMinimumHeight(72)
         self.start_btn.setStyleSheet("""
@@ -409,7 +403,7 @@ class OCRApp(QMainWindow):
         exit_btn.clicked.connect(self.close)
         button_section_layout.addWidget(exit_btn)
         
-        right_layout.addWidget(button_section, 2) # 伸缩因子为2
+        right_layout.addWidget(button_section, 2)
         
         # ========== 将左右布局添加到主布局 ==========
         main_layout.addLayout(left_layout, 3)  # 左侧占75%
@@ -475,7 +469,7 @@ class OCRApp(QMainWindow):
                     }
                     self.template_manager.save_templates()
                 
-                # 更新UI显示：设置为使用新保存的模板
+                # 更新UI显示
                 self.model_input.setText(final_model)
                 self.model_display.setText(final_model)
                 self.angle_input.setText(str(final_angle))
@@ -531,14 +525,11 @@ class OCRApp(QMainWindow):
             print(f"[✓] 图像目录已加载: {self.img_dir}")
         else:
             print("[!] 图像目录未设置，需要用户手动选择")
-            # 可选：自动弹出选择对话框
-            # self.set_image_directory()
 
     def set_image_directory(self):
         """让用户选择图像目录"""
         print("[DEBUG] set_image_directory 被调用")
         
-        # 直接在全屏模式下弹出对话框，无需切换窗口模式
         directory = QFileDialog.getExistingDirectory(
             self,
             "选择图像文件夹",
