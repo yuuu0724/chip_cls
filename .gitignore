@@ -14,3 +14,7 @@ config/trays_config.json
 build/
 dist/
 *.spec
+
+# 本地工具配置
+.idea/
+.claude/settings.local.json
