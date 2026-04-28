@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -224,7 +225,7 @@ class OCRApp(QMainWindow):
 
         # 摄像头 label：启动前占位显示"无摄像头信号"，启动后在 update_camera_frame 中更新 pixmap
         self.camera_frame = QLabel()
-        self.camera_frame.setScaledContents(True)
+        self.camera_frame.setScaledContents(False)
         self.camera_frame.setStyleSheet(S.CAMERA_FRAME)
         self.camera_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.camera_frame.setText("无摄像头信号")
@@ -233,7 +234,7 @@ class OCRApp(QMainWindow):
         # 启动预览线程（异步打开摄像头，失败时 label 保持占位文字）
         self.start_camera_preview()
 
-        right_layout.addWidget(camera_section, 1)
+        right_layout.addWidget(camera_section, 3)
         
         # ---------- 区域 2：配置中心 ----------
         param_section = QFrame()
@@ -245,6 +246,8 @@ class OCRApp(QMainWindow):
         # 分区标题
         param_title = QLabel("配置中心")
         param_title.setStyleSheet(S.SECTION_TITLE)
+        param_title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        param_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         param_section_layout.addWidget(param_title)
 
         # 设置图像目录（首次进入必须配置，否则开始检测会被拒绝）
@@ -287,7 +290,7 @@ class OCRApp(QMainWindow):
         angle_edit_layout.addWidget(self.angle_input)
         param_section_layout.addLayout(angle_edit_layout)
 
-        right_layout.addWidget(param_section, 2)
+        right_layout.addWidget(param_section, 1)
         
         # ---------- 区域 3：任务控制 ----------
         button_section = QFrame()
@@ -298,6 +301,8 @@ class OCRApp(QMainWindow):
 
         button_title = QLabel("任务控制")
         button_title.setStyleSheet(S.SECTION_TITLE)
+        button_title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         button_section_layout.addWidget(button_title)
 
         # 启动检测：整个界面最醒目的入口
@@ -350,9 +355,9 @@ class OCRApp(QMainWindow):
 
         right_layout.addWidget(button_section, 2)
 
-        # 左右布局比例 3:1（左侧占 75%，右侧占 25%）
-        main_layout.addLayout(left_layout, 3)
-        main_layout.addLayout(right_layout, 1)
+        # 左右布局比例 5:2，适当放大右侧摄像头预览宽度
+        main_layout.addLayout(left_layout, 5)
+        main_layout.addLayout(right_layout, 2)
 
         # 工业屏直接全屏，避免标题栏占用可视区
         self.showFullScreen()
@@ -482,9 +487,11 @@ class OCRApp(QMainWindow):
         self.camera_worker.start()
 
     def update_camera_frame(self, pixmap):
-        """摄像头每帧回调，按 160x120 等比缩放后贴到预览 label。"""
+        """摄像头每帧回调，按预览框当前尺寸等比缩放后贴到 label。"""
+        target_width = max(self.camera_frame.width(), 220)
+        target_height = max(self.camera_frame.height(), 140)
         scaled_pixmap = pixmap.scaled(
-            160, 120,
+            target_width, target_height,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
