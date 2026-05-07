@@ -10,10 +10,11 @@ results/
 config/app_config.json
 config/trays_config.json
 
-# 打包产物
+# 打包产物（含带时间戳的 dist_YYYYMMDD_HHMMSS / build_YYYYMMDD_HHMMSS）
 build/
+build_*/
 dist/
-*.spec
+dist_*/
 
 # 本地工具配置
 .idea/

@@ -62,9 +62,22 @@ def _register_nvidia_dll_dirs():
         return
 
     candidates = []
-    # 冻结：PyInstaller 把 CUDA DLL 拍到 _MEIPASS 根目录
+    # 冻结：PyInstaller 可能把 CUDA DLL 摊到 _MEIPASS 根目录，
+    # 也可能保留 _MEIPASS/nvidia/<lib>/bin/ 子目录布局，两路都注册。
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        candidates.append(sys._MEIPASS)
+        meipass = sys._MEIPASS
+        # 注册顺序就是 DLL 搜索优先级：先 nvidia/* wheel（dev 验证过工作），
+        # 再 ORT 自带的 capi/，最后 _MEIPASS 根作为 PATH 兜底。
+        nvidia_root = os.path.join(meipass, "nvidia")
+        if os.path.isdir(nvidia_root):
+            for name in os.listdir(nvidia_root):
+                bin_dir = os.path.join(nvidia_root, name, "bin")
+                if os.path.isdir(bin_dir):
+                    candidates.append(bin_dir)
+        capi_dir = os.path.join(meipass, "onnxruntime", "capi")
+        if os.path.isdir(capi_dir):
+            candidates.append(capi_dir)
+        candidates.append(meipass)
 
     for root in {sys.prefix, sys.base_prefix}:
         nvidia_root = os.path.join(root, "Lib", "site-packages", "nvidia")
@@ -86,6 +99,31 @@ def _register_nvidia_dll_dirs():
 
 
 _register_nvidia_dll_dirs()
+
+
+def _redirect_stderr_in_frozen():
+    """冻结态 (PyInstaller console=False) 下 sys.stderr 是 None，
+    导致 ONNX Runtime / CUDA C++ 层的诊断输出彻底丢失。
+    把 stderr 重定向到 logs/stderr_YYYYMMDD.log，方便排查 GPU 加载问题。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        log_dir = os.path.join(project_root, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, f"stderr_{datetime.now():%Y%m%d}.log")
+        f = open(path, "a", encoding="utf-8", buffering=1)
+        sys.stderr = f
+        # native code 直接写 fd=2 的也要捕获 (ORT 内部 std::cerr / printf)
+        try:
+            os.dup2(f.fileno(), 2)
+        except (OSError, AttributeError, ValueError):
+            pass
+    except Exception:
+        pass
+
+
+_redirect_stderr_in_frozen()
 
 
 def _init_user_config():
