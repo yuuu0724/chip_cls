@@ -8,7 +8,15 @@
     "description": "从图片自动识别生成 (识别文本: MAX485)"
   },
   "AEp": {
-    "angle": 0,
+    "angle": 90,
     "description": "从图片自动识别生成 (识别文本: AEp)"
+  },
+  "IEE1931CQFP100": {
+    "angle": 0,
+    "description": "从图片自动识别生成 (识别文本: IEE1931-CQFP100)"
+  },
+  "超": {
+    "angle": 270,
+    "description": "从图片自动识别生成 (识别文本: 超)"
   }
 }

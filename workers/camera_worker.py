@@ -81,8 +81,6 @@ class CameraWorker(QThread):
             if ret:
                 # 保存原始 BGR 帧（翻转前），供实时识别线程直接读取做 OCR
                 self.current_frame_bgr = frame.copy()
-                # 水平翻转让画面符合"照镜子"直觉
-                frame = cv2.flip(frame, 1)
                 # OpenCV 默认 BGR，Qt 要求 RGB
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_frame.shape

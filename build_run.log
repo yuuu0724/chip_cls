@@ -1,0 +1,365 @@
+﻿python : 713 INFO: PyInstaller: 6.19.0, contrib hooks: 2026.4
+At line:1 char:119
++ ... rce dist }; python -m PyInstaller chipocr.spec --clean --noconfirm 2> ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (713 INFO: PyIns...b hooks: 2026.4:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+713 INFO: Python: 3.10.20 (conda)
+813 INFO: Platform: Windows-10-10.0.26200-SP0
+813 INFO: Python environment: C:\Users\duany\.conda\envs\proj_ocr
+825 INFO: Removing temporary files and cleaning cache in C:\Users\duany\AppData\Local\pyinstaller
+25473 INFO: Module search paths (PYTHONPATH):
+['F:\\Data\\Project\\OCR-Proj\\chipocr',
+ 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\python310.zip',
+ 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\DLLs',
+ 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib',
+ 'C:\\Users\\duany\\.conda\\envs\\proj_ocr',
+ 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages',
+ 'F:\\Data\\Project\\OCR-Proj\\chipocr']
+26953 INFO: Appending 'binaries' from .spec
+26981 INFO: Appending 'datas' from .spec
+27502 INFO: checking Analysis
+27502 INFO: Building Analysis because Analysis-00.toc is non existent
+27502 INFO: Looking for Python shared library...
+27502 INFO: Using Python shared library: C:\Users\duany\.conda\envs\proj_ocr\python310.dll
+27502 INFO: Running Analysis Analysis-00.toc
+27502 INFO: Target bytecode optimization level: 0
+27502 INFO: Initializing module dependency graph...
+27509 INFO: Initializing module graph hook caches...
+27585 INFO: Analyzing modules for base_library.zip ...
+29425 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+29490 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+31643 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+32776 INFO: Caching module dependency graph...
+32832 INFO: Analyzing F:\Data\Project\OCR-Proj\chipocr\main.py
+32860 INFO: Processing standard module hook 'hook-PySide6.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+33355 INFO: Processing standard module hook 'hook-shiboken6.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+33501 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+36357 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+39488 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+52446 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+54861 INFO: Processing standard module hook 'hook-cv2.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+56921 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+57704 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+57870 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+57976 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+58163 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+58450 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+58473 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+59198 INFO: Processing standard module hook 'hook-psutil.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+60327 INFO: Analyzing hidden import 'onnxruntime'
+60331 INFO: Processing standard module hook 'hook-onnxruntime.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhoo
+ks'
+60486 INFO: Analyzing hidden import 'onnxruntime.backend'
+60493 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_
+import_module'
+60499 INFO: SetuptoolsInfo: initializing cached setuptools info...
+63379 INFO: Analyzing hidden import 'onnxruntime.capi.convert_npz_to_onnx_adapter'
+63381 INFO: Analyzing hidden import 'onnxruntime.datasets'
+63383 INFO: Analyzing hidden import 'onnxruntime.quantization'
+63759 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+63823 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+64790 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+64903 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+65802 INFO: Analyzing hidden import 'onnxruntime.quantization.fusions'
+65819 INFO: Analyzing hidden import 'onnxruntime.quantization.matmul_bnb4_quantizer'
+65825 INFO: Analyzing hidden import 'onnxruntime.quantization.preprocess'
+65827 INFO: Analyzing hidden import 'onnxruntime.quantization.qdq_loss_debug'
+65834 INFO: Analyzing hidden import 'onnxruntime.tools.check_onnx_model_mobile_usability'
+65873 INFO: Analyzing hidden import 'onnxruntime.tools.convert_onnx_models_to_ort'
+65909 INFO: Analyzing hidden import 'onnxruntime.tools.make_dynamic_shape_fixed'
+65913 INFO: Analyzing hidden import 'onnxruntime.tools.offline_tuning'
+65918 INFO: Analyzing hidden import 'onnxruntime.tools.onnx_randomizer'
+65922 INFO: Analyzing hidden import 'onnxruntime.tools.onnxruntime_test'
+65933 INFO: Analyzing hidden import 'onnxruntime.tools.optimize_onnx_model'
+65935 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py'
+65936 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs'
+65939 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ArgType'
+65942 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ArgTypeAndIndex'
+65945 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Attribute'
+65952 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.AttributeType'
+65954 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Checkpoint'
+65958 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedKernelCreateInfos'
+65961 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedNodeIndexAndKernelDefHash'
+65964 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedSessionState'
+65967 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedSubGraphSessionState'
+65970 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Dimension'
+65973 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DimensionValue'
+65976 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DimensionValueType'
+65978 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.EdgeEnd'
+65980 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.FloatProperty'
+65982 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Graph'
+65990 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.InferenceSession'
+65993 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.IntProperty'
+65996 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.KernelTypeStrArgsEntry'
+65999 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.KernelTypeStrResolver'
+66002 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.MapType'
+66006 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Model'
+66012 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ModuleState'
+66016 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Node'
+66023 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodeEdge'
+66028 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodeType'
+66029 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodesToOptimizeIndices'
+66033 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OpIdKernelTypeStrArgsEntry'
+66037 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OperatorSetId'
+66040 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OptimizerGroup'
+66043 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ParameterOptimizerState'
+66046 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.PropertyBag'
+66051 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizationRecord'
+66054 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizationRecordContainerEntry'
+66058 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizations'
+66061 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.SequenceType'
+66063 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Shape'
+66066 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.SparseTensor'
+66070 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.StringProperty'
+66072 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.StringStringEntry'
+66075 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Tensor'
+66080 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TensorDataType'
+66082 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TensorTypeAndShape'
+66087 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TypeInfo'
+66090 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TypeInfoValue'
+66093 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ValueInfo'
+66097 INFO: Analyzing hidden import 'onnxruntime.tools.pytorch_export_contrib_ops'
+66101 INFO: Analyzing hidden import 'onnxruntime.tools.qdq_helpers'
+66103 INFO: Analyzing hidden import 'onnxruntime.tools.qdq_helpers.optimize_qdq_model'
+66107 INFO: Analyzing hidden import 'onnxruntime.tools.reduced_build_config_parser'
+66113 INFO: Analyzing hidden import 'onnxruntime.tools.update_onnx_opset'
+66118 INFO: Analyzing hidden import 'onnxruntime.transformers.affinity_helper'
+66121 INFO: Analyzing hidden import 'onnxruntime.transformers.benchmark'
+66157 INFO: Processing pre-safe-import-module hook 'hook-tensorflow.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\
+pre_safe_import_module'
+66177 INFO: Analyzing hidden import 'onnxruntime.transformers.benchmark_helper'
+66232 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_
+import_module'
+66234 INFO: Processing pre-find-module-path hook 'hook-distutils.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_find_mo
+dule_path'
+67171 INFO: Processing standard module hook 'hook-distutils.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+67225 INFO: Processing standard module hook 'hook-_osx_support.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+67320 INFO: Analyzing hidden import 'onnxruntime.transformers.bert_perf_test'
+67333 INFO: Analyzing hidden import 'onnxruntime.transformers.bert_test_data'
+67343 INFO: Analyzing hidden import 'onnxruntime.transformers.compare_bert_results'
+67350 INFO: Analyzing hidden import 'onnxruntime.transformers.constants'
+67353 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_generation'
+67477 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_tf_models_to_pytorch'
+67497 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+67599 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_
+import_module'
+67601 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+67607 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+67634 INFO: Processing standard module hook 'hook-distutils.util.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+67742 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_imp
+ort_module'
+67744 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+67753 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\ho
+oks'
+67766 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\
+\pre_safe_import_module'
+67836 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_
+safe_import_module'
+67931 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\p
+re_safe_import_module'
+68047 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\
+pre_safe_import_module'
+68049 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+68063 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstal
+ler\\hooks'
+68101 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_impor
+t_module'
+68102 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+68311 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_impo
+rt_module'
+68313 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+68702 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_impo
+rt_module'
+69156 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\
+\stdhooks'
+69279 INFO: Processing standard module hook 'hook-chardet.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+71028 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+71137 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_to_packing_mode'
+71151 INFO: Analyzing hidden import 'onnxruntime.transformers.dynamo_onnx_helper'
+71155 INFO: Analyzing hidden import 'onnxruntime.transformers.float16'
+71169 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention'
+71193 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_clip'
+71205 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_sam2'
+71216 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_unet'
+71259 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_vae'
+71268 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_bart_attention'
+71282 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_base'
+71287 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_bias_add'
+71290 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_biasgelu'
+71294 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_biassplitgelu'
+71298 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_conformer_attention'
+71301 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_embedlayer'
+71316 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_fastgelu'
+71323 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gelu'
+71329 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gelu_approximation'
+71332 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gemmfastgelu'
+71337 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention'
+71346 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention_megatron'
+71355 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention_no_past'
+71361 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_group_norm'
+71367 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_layernorm'
+71376 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_nhwc_conv'
+71380 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_options'
+71386 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_attention'
+71395 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_gelu'
+71399 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_layernorm'
+71403 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_matmul'
+71409 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_quickgelu'
+71413 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_reshape'
+71420 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_rotary_attention'
+71450 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_shape'
+71455 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_simplified_layernorm'
+71463 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_skip_group_norm'
+71472 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_skiplayernorm'
+71481 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_transpose'
+71488 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_utils'
+71499 INFO: Analyzing hidden import 'onnxruntime.transformers.huggingface_models'
+71504 INFO: Analyzing hidden import 'onnxruntime.transformers.import_utils'
+71510 INFO: Analyzing hidden import 'onnxruntime.transformers.io_binding_helper'
+71521 INFO: Analyzing hidden import 'onnxruntime.transformers.large_model_exporter'
+71531 INFO: Analyzing hidden import 'onnxruntime.transformers.machine_info'
+71688 INFO: Processing standard module hook 'hook-pkg_resources.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+72596 INFO: Processing pre-safe-import-module hook 'hook-platformdirs.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_sa
+fe_import_module'
+72598 INFO: Setuptools: 'platformdirs' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.platformdirs'!
+72640 INFO: Analyzing hidden import 'onnxruntime.transformers.metrics'
+72644 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_exporter'
+72664 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model'
+72697 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bart'
+72711 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert'
+72758 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert_keras'
+72770 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert_tf'
+72781 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_clip'
+72787 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_conformer'
+72792 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_gpt2'
+72800 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_phi'
+72845 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_sam2'
+72949 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_t5'
+72964 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_tnlr'
+72969 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_unet'
+72994 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_vae'
+73005 INFO: Analyzing hidden import 'onnxruntime.transformers.optimizer'
+73038 INFO: Analyzing hidden import 'onnxruntime.transformers.profiler'
+73052 INFO: Analyzing hidden import 'onnxruntime.transformers.quantize_helper'
+73057 INFO: Analyzing hidden import 'onnxruntime.transformers.shape_infer_helper'
+73065 INFO: Analyzing hidden import 'onnxruntime.transformers.shape_optimizer'
+73075 INFO: Analyzing hidden import 'onnxruntime.transformers.torch_onnx_export_helper'
+73077 INFO: Analyzing hidden import 'nvidia.cuda_runtime'
+73082 INFO: Analyzing hidden import 'nvidia.cuda_runtime.bin'
+73085 INFO: Analyzing hidden import 'nvidia.cuda_runtime.include'
+73087 INFO: Analyzing hidden import 'nvidia.cublas'
+73088 INFO: Analyzing hidden import 'nvidia.cublas.bin'
+73090 INFO: Analyzing hidden import 'nvidia.cublas.include'
+73092 INFO: Analyzing hidden import 'nvidia.cudnn'
+73093 INFO: Analyzing hidden import 'nvidia.cudnn.bin'
+73095 INFO: Analyzing hidden import 'nvidia.cudnn.include'
+73096 INFO: Analyzing hidden import 'nvidia.cufft'
+73098 INFO: Analyzing hidden import 'nvidia.cufft.bin'
+73100 INFO: Analyzing hidden import 'nvidia.cufft.include'
+73101 INFO: Analyzing hidden import 'nvidia.curand'
+73102 INFO: Analyzing hidden import 'nvidia.curand.bin'
+73104 INFO: Analyzing hidden import 'nvidia.curand.include'
+73105 INFO: Analyzing hidden import 'nvidia.cusolver'
+73107 INFO: Analyzing hidden import 'nvidia.cusolver.bin'
+73109 INFO: Analyzing hidden import 'nvidia.cusolver.include'
+73110 INFO: Analyzing hidden import 'nvidia.cusparse'
+73111 INFO: Analyzing hidden import 'nvidia.cusparse.bin'
+73113 INFO: Analyzing hidden import 'nvidia.cusparse.include'
+73114 INFO: Analyzing hidden import 'nvidia.nvjitlink'
+73115 INFO: Analyzing hidden import 'pyclipper'
+73122 INFO: Analyzing hidden import 'cv2.config'
+73123 INFO: Analyzing hidden import 'cv2.config-3'
+73125 INFO: Analyzing hidden import 'cv2.cv2'
+73126 INFO: Analyzing hidden import 'cv2.data'
+73127 INFO: Analyzing hidden import 'cv2.gapi'
+73135 INFO: Analyzing hidden import 'cv2.load_config_py2'
+73137 INFO: Analyzing hidden import 'cv2.mat_wrapper'
+73139 INFO: Analyzing hidden import 'cv2.misc'
+73143 INFO: Analyzing hidden import 'cv2.typing'
+73152 INFO: Analyzing hidden import 'cv2.utils'
+73155 INFO: Processing module hooks (post-graph stage)...
+73159 WARNING: Hidden import "ascii__mypyc" not found!
+73161 WARNING: Hidden import "confusion__mypyc" not found!
+73164 WARNING: Hidden import "escape__mypyc" not found!
+73168 WARNING: Hidden import "magic__mypyc" not found!
+73170 WARNING: Hidden import "orchestrator__mypyc" not found!
+73173 WARNING: Hidden import "statistical__mypyc" not found!
+73176 WARNING: Hidden import "structural__mypyc" not found!
+73179 WARNING: Hidden import "utf1632__mypyc" not found!
+73182 WARNING: Hidden import "utf8__mypyc" not found!
+73184 WARNING: Hidden import "validity__mypyc" not found!
+73198 INFO: Processing standard module hook 'hook-nvidia.cublas.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdh
+ooks'
+73540 INFO: Processing standard module hook 'hook-nvidia.cuda_runtime.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib
+\\stdhooks'
+73901 INFO: Processing standard module hook 'hook-nvidia.cudnn.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdho
+oks'
+74276 INFO: Processing standard module hook 'hook-nvidia.cufft.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdho
+oks'
+74639 INFO: Processing standard module hook 'hook-nvidia.curand.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdh
+ooks'
+75016 INFO: Processing standard module hook 'hook-nvidia.cusolver.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\st
+dhooks'
+75391 INFO: Processing standard module hook 'hook-nvidia.cusparse.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\st
+dhooks'
+75751 INFO: Processing standard module hook 'hook-nvidia.nvjitlink.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\_pyinstaller_hooks_contrib\\s
+tdhooks'
+76368 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+76938 INFO: Performing binary vs. data reclassification (816 entries)
+77732 INFO: Looking for ctypes DLLs
+77778 INFO: Analyzing run-time hooks ...
+77783 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77786 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77791 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77794 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77796 INFO: Including run-time hook 'pyi_rth_pkgres.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77800 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+77801 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks\\pre_fi
+nd_module_path'
+77808 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\PyInstaller\\hooks'
+77854 INFO: Creating base_library.zip...
+77871 INFO: Looking for dynamic libraries
+C:\Users\duany\.conda\envs\proj_ocr\lib\site-packages\PyInstaller\building\build_main.py:227: UserWarning: pkg_resources is deprecated as an API. See https://setuptools
+.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  __import__(package)
+C:\Users\duany\.conda\envs\proj_ocr\lib\site-packages\PyInstaller\building\build_main.py:227: UserWarning: The numpy.array_api submodule is still experimental. See NEP 
+47.
+  __import__(package)
+85008 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\duany\\.conda\\envs\\proj_ocr\\Lib\\site-packages\\shiboken6', 'C:\\Users\\duany\\.conda\\envs\
+\proj_ocr\\lib\\site-packages\\numpy.libs', 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\Lib\\site-packages\\cv2\\../../x64/vc17/bin']
+85009 INFO: Extra DLL search directories (PATH): ['C:\\Users\\duany\\.conda\\envs\\proj_ocr\\Lib\\site-packages\\cv2\\../../x64/vc17/bin', 'C:\\Users\\duany\\.conda\\en
+vs\\proj_ocr\\Lib\\site-packages\\PySide6']
+91418 WARNING: Library not found: could not resolve 'nvinfer_plugin_10.dll', dependency of 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\onnxruntime\\c
+api\\onnxruntime_providers_tensorrt.dll'.
+91418 WARNING: Library not found: could not resolve 'nvonnxparser_10.dll', dependency of 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\onnxruntime\\cap
+i\\onnxruntime_providers_tensorrt.dll'.
+91420 WARNING: Library not found: could not resolve 'nvinfer_10.dll', dependency of 'C:\\Users\\duany\\.conda\\envs\\proj_ocr\\lib\\site-packages\\onnxruntime\\capi\\on
+nxruntime_providers_tensorrt.dll'.
+91835 INFO: Warnings written to F:\Data\Project\OCR-Proj\chipocr\build\chipocr\warn-chipocr.txt
+91975 INFO: Graph cross-reference written to F:\Data\Project\OCR-Proj\chipocr\build\chipocr\xref-chipocr.html
+92056 INFO: checking PYZ
+92056 INFO: Building PYZ because PYZ-00.toc is non existent
+92056 INFO: Building PYZ (ZlibArchive) F:\Data\Project\OCR-Proj\chipocr\build\chipocr\PYZ-00.pyz
+92606 INFO: Building PYZ (ZlibArchive) F:\Data\Project\OCR-Proj\chipocr\build\chipocr\PYZ-00.pyz completed successfully.
+92634 INFO: checking PKG
+92634 INFO: Building PKG because PKG-00.toc is non existent
+92634 INFO: Building PKG (CArchive) chipocr.pkg
+92675 INFO: Building PKG (CArchive) chipocr.pkg completed successfully.
+92677 INFO: Bootloader C:\Users\duany\.conda\envs\proj_ocr\lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+92677 INFO: checking EXE
+92677 INFO: Building EXE because EXE-00.toc is non existent
+92677 INFO: Building EXE from EXE-00.toc
+92678 INFO: Copying bootloader EXE to F:\Data\Project\OCR-Proj\chipocr\build\chipocr\chipocr.exe
+93031 INFO: Copying icon to EXE
+93205 INFO: Copying 0 resources to EXE
+93205 INFO: Embedding manifest in EXE
+93399 INFO: Appending PKG archive to EXE
+93407 INFO: Fixing EXE headers
+93494 INFO: Building EXE from EXE-00.toc completed successfully.
+93504 INFO: checking COLLECT
+93504 INFO: Building COLLECT because COLLECT-00.toc is non existent
+93506 INFO: Building COLLECT COLLECT-00.toc
+106228 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+106252 INFO: Build complete! The results are available in: F:\Data\Project\OCR-Proj\chipocr\dist
