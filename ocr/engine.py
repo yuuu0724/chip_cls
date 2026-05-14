@@ -352,13 +352,20 @@ class OCREngine:
         cls_result = self.classifier.predict(image)
         angle = self._parse_angle(cls_result.get("label", 0))
         upright_image = self._rotate_to_upright(image, angle)
+        h, w = upright_image.shape[:2]
 
         # 2) 检测：没框就整图作为候选；有框按面积降序截断
         raw_results = self.detector.detect_and_crop(upright_image)
         logger.info("OCR 检测候选框数量=%d", len(raw_results))
         if not raw_results:
             logger.info("OCR 检测未返回文本框，使用整图作为识别候选")
-            raw_results = [{"crop": upright_image}]
+            raw_results = [{
+                "crop": upright_image,
+                "box": self.np.array(
+                    [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
+                    dtype=self.np.float32,
+                ),
+            }]
         else:
             raw_results = sorted(
                 raw_results,
@@ -369,6 +376,7 @@ class OCREngine:
         # 3) 识别 + 严过滤 + 兜底
         valid_texts = []       # 达到严阈值的文本
         fallback_texts = []    # 原始去重文本，供兜底使用
+        visual_items = []      # 调光预览用：识别文本 + 置信度 + 检测框
         crops = [item["crop"] for item in raw_results]
         batch_capacity = self._get_rec_batch_capacity(len(crops))
         for start in range(0, len(crops), batch_capacity):
@@ -379,10 +387,18 @@ class OCREngine:
                 # 批量失败 -> 逐张退化（比如某些模型不支持动态 batch）
                 rec_results = [self._predict_text_with_score(crop) for crop in crop_chunk]
 
-            for text, score in rec_results:
+            for offset, (text, score) in enumerate(rec_results):
                 clean_text = text.strip()
                 if not clean_text:
                     continue
+
+                raw_item = raw_results[start + offset]
+                box = raw_item.get("box")
+                visual_items.append({
+                    "text": clean_text,
+                    "score": float(score),
+                    "box": box.astype(float).tolist() if box is not None else None,
+                })
 
                 if clean_text not in fallback_texts:
                     fallback_texts.append(clean_text)
@@ -416,11 +432,21 @@ class OCREngine:
                 valid_texts = fallback_texts[:1]
 
         if not valid_texts:
-            return {"angle": int(angle), "texts": [], "status": "empty"}
+            return {
+                "angle": int(angle),
+                "texts": [],
+                "items": visual_items,
+                "box_coordinate": "upright",
+                "image_shape": [int(h), int(w)],
+                "status": "empty",
+            }
 
         return {
             "angle": int(angle),
             "texts": valid_texts,
+            "items": visual_items,
+            "box_coordinate": "upright",
+            "image_shape": [int(h), int(w)],
             "status": "success",
         }
 

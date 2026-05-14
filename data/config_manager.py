@@ -35,6 +35,13 @@ class ConfigManager:
         "output_directory": "output",  # 结果输出目录（保留字段，当前主要用 DataLogger.base_dir）
         "auto_detect": False,      # 预留开关：未来可实现上传即检测
         "camera_id": 0,            # 摄像头索引，0 是内置，1/2 是外接
+        "serial_enabled": False,   # 是否启用 485 串口；上线真实设备时打开
+        "serial_port": None,       # 例如 Windows: COM3；Linux: /dev/ttyUSB0
+        "serial_baudrate": 9600,
+        "serial_timeout": 1.0,
+        "device_command_timeout_sec": 5.0,
+        "homing_timeout_sec": 60.0,
+        "device_simulation": True,  # 当前默认模拟回零；上线真实设备时改为 False
     }
 
     def __init__(self):

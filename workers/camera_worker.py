@@ -40,8 +40,25 @@ class CameraWorker(QThread):
         self.camera_id = camera_id
         self.is_running = True
         self.cap = None  # VideoCapture，在 run() 里真正打开
-        # 最新一帧的原始 BGR numpy array（未水平翻转），供实时识别线程读取
+        # 最新一帧的识别输入 BGR；灰度模式下仍保持三通道，供 OCR 直接读取
         self.current_frame_bgr = None
+        # 最新原始 BGR 帧，用于灰度开关切换时恢复彩色输入
+        self.current_raw_frame_bgr = None
+        self.grayscale_enabled = False
+
+    @staticmethod
+    def _to_gray_bgr(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    def set_grayscale_enabled(self, enabled):
+        self.grayscale_enabled = bool(enabled)
+        if self.current_raw_frame_bgr is None:
+            return
+        if self.grayscale_enabled:
+            self.current_frame_bgr = self._to_gray_bgr(self.current_raw_frame_bgr)
+        else:
+            self.current_frame_bgr = self.current_raw_frame_bgr.copy()
 
     def _open_camera(self):
         """尝试多种后端打开摄像头，返回 None 表示全部失败。
@@ -80,9 +97,14 @@ class CameraWorker(QThread):
             ret, frame = self.cap.read()
             if ret:
                 # 保存原始 BGR 帧（翻转前），供实时识别线程直接读取做 OCR
-                self.current_frame_bgr = frame.copy()
+                self.current_raw_frame_bgr = frame.copy()
+                display_frame = (
+                    self._to_gray_bgr(self.current_raw_frame_bgr)
+                    if self.grayscale_enabled else self.current_raw_frame_bgr
+                )
+                self.current_frame_bgr = display_frame.copy()
                 # OpenCV 默认 BGR，Qt 要求 RGB
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_frame.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)

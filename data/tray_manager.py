@@ -17,6 +17,7 @@
 import json
 import os
 import sys
+from datetime import datetime
 
 
 def _app_root():
@@ -63,6 +64,8 @@ class TrayManager:
                 "model": "ATMLH904",
                 "angle": 90,
                 "spec": "3x7",
+                "rows": 3,
+                "cols": 7,
                 "status": "可用"
             },
             "A0002": {
@@ -71,6 +74,8 @@ class TrayManager:
                 "model": "MAX485",
                 "angle": 0,
                 "spec": "3x7",
+                "rows": 3,
+                "cols": 7,
                 "status": "可用"
             },
             "A0003": {
@@ -79,6 +84,8 @@ class TrayManager:
                 "model": "24C02BN",
                 "angle": 90,
                 "spec": "3x7",
+                "rows": 3,
+                "cols": 7,
                 "status": "可用"
             }
         }
@@ -116,7 +123,107 @@ class TrayManager:
             return tray.get("spec", "3x7")
         return "3x7"
 
-    def add_tray(self, tray_id, name, description, model, angle, spec="3x7"):
+    def get_tray_dimensions(self, tray_id):
+        """返回料盘行列数，优先使用新字段，兼容旧的 ``spec``。"""
+        tray = self.trays.get(tray_id) or {}
+        rows = tray.get("rows")
+        cols = tray.get("cols")
+        if rows and cols:
+            return int(rows), int(cols)
+        try:
+            rows_text, cols_text = self.get_tray_spec(tray_id).split("x")
+            return int(rows_text), int(cols_text)
+        except (ValueError, AttributeError):
+            return 3, 7
+
+    def get_tray_motion_params(self, tray_id):
+        """返回料盘运动参数；旧配置缺字段时返回 None。"""
+        tray = self.trays.get(tray_id)
+        if not tray:
+            return None
+        origin = tray.get("firstSlotOrigin") or {}
+        return {
+            "rows": tray.get("rows"),
+            "cols": tray.get("cols"),
+            "pitchX": tray.get("pitchX"),
+            "pitchY": tray.get("pitchY"),
+            "originX": origin.get("x"),
+            "originY": origin.get("y"),
+            "originZ": origin.get("z"),
+            "rowDirection": tray.get("rowDirection", 1),
+            "colDirection": tray.get("colDirection", 1),
+        }
+
+    def is_tray_config_complete(self, tray_id):
+        """校验料盘是否具备后续运动所需的完整几何参数。"""
+        params = self.get_tray_motion_params(tray_id)
+        if not params:
+            return False, "当前未选择有效料盘。"
+
+        required = ["rows", "cols", "pitchX", "pitchY", "originX", "originY", "originZ"]
+        missing = [key for key in required if params.get(key) is None]
+        if missing:
+            return False, "料盘缺少运动参数：" + ", ".join(missing)
+
+        try:
+            rows = int(params["rows"])
+            cols = int(params["cols"])
+            pitch_x = float(params["pitchX"])
+            pitch_y = float(params["pitchY"])
+            float(params["originX"])
+            float(params["originY"])
+            float(params["originZ"])
+        except (TypeError, ValueError):
+            return False, "料盘运动参数包含非法数字。"
+
+        if rows <= 0 or cols <= 0:
+            return False, "料盘行数、列数必须大于 0。"
+        if pitch_x <= 0 or pitch_y <= 0:
+            return False, "料盘横向间距、纵向间距必须大于 0。"
+        return True, "料盘运动参数完整。"
+
+    def calculate_slot_coordinate(self, tray_id, slot_index):
+        """按 0 基准槽位索引计算目标坐标。"""
+        ok, message = self.is_tray_config_complete(tray_id)
+        if not ok:
+            raise ValueError(message)
+
+        params = self.get_tray_motion_params(tray_id)
+        rows = int(params["rows"])
+        cols = int(params["cols"])
+        slot_index = int(slot_index)
+        if slot_index < 0 or slot_index >= rows * cols:
+            raise ValueError("槽位索引超出当前料盘范围。")
+
+        row = slot_index // cols
+        col = slot_index % cols
+        col_dir = -1 if int(params.get("colDirection", 1)) < 0 else 1
+        row_dir = -1 if int(params.get("rowDirection", 1)) < 0 else 1
+        return {
+            "x": float(params["originX"]) + col * float(params["pitchX"]) * col_dir,
+            "y": float(params["originY"]) + row * float(params["pitchY"]) * row_dir,
+            "z": float(params["originZ"]),
+            "row": row,
+            "col": col,
+        }
+
+    def add_tray(
+        self,
+        tray_id,
+        name,
+        description,
+        model,
+        angle,
+        spec="3x7",
+        rows=None,
+        cols=None,
+        pitch_x=None,
+        pitch_y=None,
+        origin_x=None,
+        origin_y=None,
+        origin_z=None,
+        light_config=None,
+    ):
         """新增一条料盘记录并立即落盘。
 
         注意
@@ -124,13 +231,33 @@ class TrayManager:
         不检查 ``tray_id`` 是否已存在；调用方（UI 层 `AddTrayDialog`）
         负责在弹窗阶段保证唯一性。
         """
+        if rows is None or cols is None:
+            try:
+                rows, cols = spec.split("x")
+            except (ValueError, AttributeError):
+                rows, cols = 3, 7
+        now = datetime.now().isoformat(timespec="seconds")
         self.trays[tray_id] = {
             "name": name,
             "description": description,
             "model": model,
             "angle": angle,
             "spec": spec,
-            "status": "可用"
+            "rows": int(rows),
+            "cols": int(cols),
+            "pitchX": float(pitch_x) if pitch_x is not None else None,
+            "pitchY": float(pitch_y) if pitch_y is not None else None,
+            "firstSlotOrigin": {
+                "x": float(origin_x) if origin_x is not None else None,
+                "y": float(origin_y) if origin_y is not None else None,
+                "z": float(origin_z) if origin_z is not None else None,
+            },
+            "lightConfig": light_config or {},
+            "rowDirection": 1,
+            "colDirection": 1,
+            "status": "可用",
+            "createdAt": now,
+            "updatedAt": now,
         }
         self.save_trays()
         return True
@@ -138,6 +265,7 @@ class TrayManager:
     def update_tray(self, tray_id, **kwargs):
         """按 kwargs 合并更新料盘字段；不存在则不做事返回 False。"""
         if tray_id in self.trays:
+            kwargs["updatedAt"] = datetime.now().isoformat(timespec="seconds")
             self.trays[tray_id].update(kwargs)
             self.save_trays()
             return True

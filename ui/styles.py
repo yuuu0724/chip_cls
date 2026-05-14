@@ -122,7 +122,7 @@ PRIMARY_BUTTON = """
         border: none;
         border-radius: 8px;
         font-weight: 600;
-        font-size: 16px;
+        font-size: 14px;
     }
     QPushButton:hover {
         background-color: #0A84FF;
@@ -140,7 +140,7 @@ WARNING_BUTTON = """
         border: none;
         border-radius: 8px;
         font-weight: 600;
-        font-size: 16px;
+        font-size: 14px;
     }
     QPushButton:hover {
         background-color: #FFB020;
@@ -158,9 +158,9 @@ START_BUTTON = """
         color: #ffffff;
         border: 2px solid #0A84FF;
         border-radius: 8px;
-        font-size: 19px;
+        font-size: 16px;
         font-weight: 700;
-        letter-spacing: 1.2px;
+        letter-spacing: 0px;
         box-shadow: 0 0 20px rgba(0, 122, 255, 0.6);
     }
     QPushButton:hover {
@@ -190,13 +190,35 @@ REFRESH_BUTTON = """
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 8px;
         font-weight: 600;
-        font-size: 15px;
+        font-size: 13px;
     }
     QPushButton:hover {
         background-color: rgba(99, 99, 104, 0.8);
     }
     QPushButton:pressed {
         background-color: rgba(77, 77, 82, 0.9);
+    }
+"""
+
+# 灰度图像切换按钮
+GRAYSCALE_TOGGLE_BUTTON = """
+    QPushButton {
+        background-color: rgba(90, 90, 95, 0.58);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 13px;
+    }
+    QPushButton:hover {
+        background-color: rgba(99, 99, 104, 0.82);
+    }
+    QPushButton:checked {
+        background-color: rgba(10, 132, 255, 0.30);
+        border: 1px solid rgba(10, 132, 255, 0.95);
+    }
+    QPushButton:checked:hover {
+        background-color: rgba(10, 132, 255, 0.42);
     }
 """
 
@@ -208,7 +230,7 @@ HISTORY_BUTTON = """
         border: 1px solid rgba(52, 199, 89, 0.8);
         border-radius: 8px;
         font-weight: 600;
-        font-size: 15px;
+        font-size: 13px;
     }
     QPushButton:hover {
         background-color: rgba(52, 199, 89, 0.35);
@@ -226,7 +248,7 @@ EXIT_BUTTON = """
         border: none;
         border-radius: 8px;
         font-weight: 600;
-        font-size: 15px;
+        font-size: 13px;
     }
     QPushButton:hover {
         background-color: #A55A54;
@@ -239,7 +261,7 @@ EXIT_BUTTON = """
 
 # ---------- 配置中心内的控件 ----------
 # 配置中心内的标签（"型号:" / "角度:"）
-PARAM_LABEL = "color: #a1a1a6; font-size: 15px; font-weight: 500; min-width: 40px;"
+PARAM_LABEL = "color: #a1a1a6; font-size: 13px; font-weight: 500; min-width: 36px;"
 
 # 配置中心内的单行输入框（型号 / 角度）
 PARAM_INPUT = """
@@ -248,14 +270,14 @@ PARAM_INPUT = """
         background-color: #2a2a2e;
         border: 1px solid #007AFF;
         border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 15px;
+        padding: 5px 9px;
+        font-size: 13px;
         font-weight: 500;
         selection-background-color: #007AFF;
     }
     QLineEdit:focus {
         border: 2px solid #007AFF;
-        padding: 7px 11px;
+        padding: 4px 8px;
     }
 """
 
@@ -296,9 +318,9 @@ LIVE_BUTTON = """
         color: #ffffff;
         border: 2px solid #BF5AF2;
         border-radius: 8px;
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 700;
-        letter-spacing: 1px;
+        letter-spacing: 0px;
     }
     QPushButton:hover {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

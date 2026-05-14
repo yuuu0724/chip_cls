@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ocr import OCREngine, TemplateManager
+from workers import DeviceController
 
 from .config_manager import ConfigManager
 from .logger import DataLogger
@@ -63,6 +64,7 @@ class AppServices:
     tray_manager: TrayManager
     data_logger: DataLogger
     config_manager: ConfigManager
+    device_controller: DeviceController | None = None
 
     @classmethod
     def create_default(cls) -> "AppServices":
@@ -81,13 +83,15 @@ class AppServices:
         """
         engine = OCREngine()
         template_manager = TemplateManager()
+        config_manager = ConfigManager()
         tray_manager = TrayManager()
         data_logger = DataLogger()
-        config_manager = ConfigManager()
+        device_controller = DeviceController(config_manager.get_config())
         return cls(
             engine=engine,
             template_manager=template_manager,
             tray_manager=tray_manager,
             data_logger=data_logger,
             config_manager=config_manager,
+            device_controller=device_controller,
         )

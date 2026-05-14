@@ -32,7 +32,17 @@ class ControlWorker(QThread):
     progress_update = Signal(int, str, str)
     finished = Signal()
 
-    def __init__(self, engine, img_dir, target_m, target_a, data_logger, total_slots=21, parent=None):
+    def __init__(
+        self,
+        engine,
+        img_dir,
+        target_m,
+        target_a,
+        data_logger,
+        total_slots=21,
+        grayscale_enabled=False,
+        parent=None,
+    ):
         """
         Parameters
         ----------
@@ -57,6 +67,12 @@ class ControlWorker(QThread):
         self.target_a = target_a
         self.data_logger = data_logger
         self.total_slots = total_slots
+        self.grayscale_enabled = bool(grayscale_enabled)
+
+    @staticmethod
+    def _to_gray_bgr(image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
     def _preload_images(self, files):
         """把所有图片一次性读到内存。
@@ -141,7 +157,10 @@ class ControlWorker(QThread):
         for index in range(self.total_slots):
             if index < len(files) and files[index] in preloaded:
                 infer_start = time.time()
-                result = self.engine.predict_image_from_array(preloaded[files[index]])
+                image = preloaded[files[index]]
+                if self.grayscale_enabled:
+                    image = self._to_gray_bgr(image)
+                result = self.engine.predict_image_from_array(image)
                 logger.info("槽位 %02d 推理完成, 耗时 %.3fs",
                             index + 1, time.time() - infer_start)
             else:

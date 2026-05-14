@@ -3,17 +3,17 @@
 工作流程（每个槽位）
 --------------------
 1. 若不是第一个槽位，发出 ``request_move_confirm`` 信号，等待工人确认（手动模式）
-   或 RS232 到位信号（自动模式）；
+   或 RS485 到位信号（自动模式）；
 2. 在约 1 秒内连续采集 3 帧摄像头图像，逐帧调用 OCR 引擎推理；
 3. 三帧识别结果（status）完全一致 → 视为该槽位识别成功；否则重新采集，
    最多重试 ``_MAX_RETRY_ROUNDS`` 轮；
 4. 将最终结果通过 ``slot_recognized`` 信号回到主线程更新 UI，
-   并调用 RS232 预留接口（如果已绑定）。
+   并调用 RS485 预留接口（如果已绑定）。
 
 模式
 ----
 - ``"manual"``：每次切换槽位都等待 UI 层确认回调（``confirm_move()``）。
-- ``"auto"``：预留，逻辑与 manual 相同，由 ``RS232Interface.on_slot_move_done``
+- ``"auto"``：预留，逻辑与 manual 相同，由 ``RS485Interface.on_slot_move_done``
   在适当时候调用 ``confirm_move()`` 驱动。
 
 线程安全
@@ -58,8 +58,19 @@ class LiveInspectionWorker(QThread):
     all_done = Signal()
     status_message = Signal(str)
 
-    def __init__(self, engine, camera_worker, target_m, target_a,
-                 data_logger, total_slots, rs232=None, mode="manual", parent=None):
+    def __init__(
+        self,
+        engine,
+        camera_worker,
+        target_m,
+        target_a,
+        data_logger,
+        total_slots,
+        rs485=None,
+        mode="manual",
+        parent=None,
+        rs232=None,
+    ):
         """
         Parameters
         ----------
@@ -75,8 +86,8 @@ class LiveInspectionWorker(QThread):
             CSV 日志记录器。
         total_slots : int
             当前料盘总槽位数。
-        rs232 : RS232Interface | None
-            RS232 通信接口；None 时跳过通信调用。
+        rs485 : RS485Interface | None
+            RS485 通信接口；None 时跳过通信调用。
         mode : str
             ``"manual"`` 或 ``"auto"``（自动模式预留，当前与手动等价）。
         """
@@ -87,12 +98,12 @@ class LiveInspectionWorker(QThread):
         self.target_a = target_a
         self.data_logger = data_logger
         self.total_slots = total_slots
-        self.rs232 = rs232
+        self.rs485 = rs485 if rs485 is not None else rs232
         self.mode = mode
 
         # 停止标志；外部调用 stop() 后置 True
         self._stop_flag = False
-        # 槽位移动确认事件；工人点"确认"或 RS232 回调后 set()
+        # 槽位移动确认事件；工人点"确认"或 RS485 回调后 set()
         self._move_confirmed = threading.Event()
 
     # ------------------------------------------------------------------
@@ -236,9 +247,9 @@ class LiveInspectionWorker(QThread):
             angle = result.get("angle", 0)
             self.data_logger.log_result(slot_index + 1, "|".join(texts), angle, status)
 
-            # 通知 RS232 接口（预留，None 时跳过）
-            if self.rs232 is not None:
-                self.rs232.on_slot_recognized(
+            # 通知 RS485 接口（预留，None 时跳过）
+            if self.rs485 is not None:
+                self.rs485.on_slot_recognized(
                     slot_index + 1, {"status": status, "color": color}
                 )
 

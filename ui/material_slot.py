@@ -5,7 +5,7 @@
 `MaterialController.analyze_status` 里完成。
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 
@@ -18,6 +18,8 @@ class MaterialSlot(QFrame):
         料位编号（1 基准，用于 UI 左上角显示）。内部槽位索引在主窗口和
         日志里统一使用 0 基准，但在用户看到的位置都要 +1。
     """
+
+    clicked = Signal(int)
 
     def __init__(self, index):
         super().__init__()
@@ -131,3 +133,9 @@ class MaterialSlot(QFrame):
             border-radius: 8px;
             """
         )
+
+    def mousePressEvent(self, event):
+        """点击槽位时发出 0 基准槽位索引，供主窗口确认后执行运动。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.index - 1)
+        super().mousePressEvent(event)

@@ -18,5 +18,57 @@
   "超": {
     "angle": 270,
     "description": "从图片自动识别生成 (识别文本: 超)"
+  },
+  "HIKVISION": {
+    "angle": 0,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "HIKVISION",
+    "standardChipModel": "HIKVISION",
+    "ocrTexts": [
+      "HIKVISION\""
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\HIKVISION_20260512_182907.png",
+    "trayId": "A0001",
+    "lightConfig": {
+      "light1Voltage": 0.20000000000000004,
+      "light2Voltage": 0.0
+    },
+    "createdAt": "2026-05-12T18:29:07",
+    "updatedAt": "2026-05-12T18:29:07"
+  },
+  "666": {
+    "angle": 90,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "666",
+    "standardChipModel": "666",
+    "ocrTexts": [
+      "666"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\666_20260514_203347.png",
+    "trayId": "A0001",
+    "lightConfig": {
+      "light1Voltage": 0.0,
+      "light2Voltage": 0.0
+    },
+    "createdAt": "2026-05-14T20:33:47",
+    "updatedAt": "2026-05-14T20:33:47"
+  },
+  "BetweenMinds": {
+    "angle": 0,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "BetweenMinds",
+    "standardChipModel": "BetweenMinds",
+    "ocrTexts": [
+      "BetweenMinds:",
+      "跨文化交际"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\BetweenMinds_20260514_204250.png",
+    "trayId": "A0001",
+    "lightConfig": {
+      "light1Voltage": 0.0,
+      "light2Voltage": 0.0
+    },
+    "createdAt": "2026-05-14T20:36:23",
+    "updatedAt": "2026-05-14T20:42:50"
   }
 }
