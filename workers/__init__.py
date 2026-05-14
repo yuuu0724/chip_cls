@@ -12,5 +12,4 @@ __all__ = [
     'DeviceController',
     'LiveInspectionWorker',
     'RS485Interface',
-    'RS232Interface',
 ]
