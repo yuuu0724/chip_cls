@@ -16,6 +16,7 @@
 import os
 import tempfile
 
+from motion import x_mm_to_pulses, y_mm_to_pulses
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -68,7 +69,7 @@ class TemplateConfirmDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("确认模板参数")
-        self.setFixedSize(560, 520)
+        self.setFixedSize(560, 560)
         self.setStyleSheet(
             """
             QDialog { background-color: #1a1a1e; }
@@ -87,7 +88,7 @@ class TemplateConfirmDialog(QDialog):
         title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
 
-        tips = QLabel("请选择当前模板对应的标准芯片型号；识别为空或错误时可手动输入。")
+        tips = QLabel("请选择当前模板对应的标准芯片型号；下拉框仅包含本次 OCR 识别结果。")
         tips.setStyleSheet("color: #FFD60A; font-size: 13px; line-height: 1.5;")
         tips.setWordWrap(True)
         layout.addWidget(tips)
@@ -99,7 +100,7 @@ class TemplateConfirmDialog(QDialog):
         self.raw_text_display = QTextEdit()
         self.raw_text_display.setPlainText("\n".join(self.detected_texts) or "未识别到文本")
         self.raw_text_display.setReadOnly(True)
-        self.raw_text_display.setMaximumHeight(86)
+        self.raw_text_display.setMaximumHeight(140)
         self.raw_text_display.setStyleSheet(
             """
             QTextEdit {
@@ -119,7 +120,7 @@ class TemplateConfirmDialog(QDialog):
         layout.addWidget(model_label)
 
         self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
+        self.model_combo.setEditable(False)
         self.model_combo.setMinimumHeight(38)
         self.model_combo.setStyleSheet(
             """
@@ -133,23 +134,48 @@ class TemplateConfirmDialog(QDialog):
                 font-weight: 600;
                 selection-background-color: #007AFF;
             }
-            QComboBox::drop-down { border: none; }
+            QComboBox {
+                padding-right: 36px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 34px;
+                border-left: 1px solid #444449;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+                background-color: #3a3a3f;
+            }
+            QComboBox::drop-down:hover {
+                background-color: #4a4a50;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 7px solid #ffffff;
+                margin-right: 11px;
+            }
             QComboBox QAbstractItemView {
                 background-color: #1a1a1e;
                 color: #ffffff;
+                border: 1px solid #444449;
                 selection-background-color: #007AFF;
             }
             """
         )
         seen = set()
-        for text in self.detected_texts + list(existing_models or []):
+        for text in self.detected_texts:
             text = str(text).strip()
             if text and text not in seen:
                 self.model_combo.addItem(text)
                 seen.add(text)
-        if detected_model and detected_model not in seen:
-            self.model_combo.insertItem(0, detected_model)
-        self.model_combo.setCurrentText(detected_model or "")
+        if detected_model and detected_model in seen:
+            self.model_combo.setCurrentText(detected_model)
+        elif self.model_combo.count() > 0:
+            self.model_combo.setCurrentIndex(0)
         layout.addWidget(self.model_combo)
 
         angle_label = QLabel("识别到的角度:")
@@ -955,6 +981,9 @@ class VirtualKeyboardDialog(QDialog):
 class AddTrayDialog(QDialog):
     """新增料盘对话框，录入基础参数和首槽坐标。"""
 
+    jog_requested = Signal(str, int, int)
+    origin_saved = Signal(dict)
+
     _FIELD_STYLE = """
         color: #ffffff;
         background-color: #2a2a2e;
@@ -966,33 +995,51 @@ class AddTrayDialog(QDialog):
     """
     _LABEL_STYLE = "color: #a1a1a6; font-size: 13px; margin-top: 6px;"
 
-    def __init__(self, existing_ids, coordinate_provider=None, light_adjuster=None, parent=None):
+    def __init__(
+        self,
+        existing_ids,
+        coordinate_provider=None,
+        light_adjuster=None,
+        parent=None,
+        initial_data=None,
+        edit_mode=False,
+    ):
         super().__init__(parent)
-        self.setWindowTitle("新增料盘")
-        self.setFixedSize(600, 740)
+        self.setWindowTitle("编辑料盘" if edit_mode else "新增料盘")
+        self.setFixedSize(920, 700)
         self.setStyleSheet("QDialog { background-color: #1a1a1e; } QLabel { color: #ffffff; }")
         self.existing_ids = existing_ids
         self.coordinate_provider = coordinate_provider
         self.light_adjuster = light_adjuster
         self.light_config = {}
+        self.initial_data = initial_data or {}
+        self.edit_mode = bool(edit_mode)
+        self._numeric_spin_editors = {}
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(20, 20, 20, 20)
+        root_layout = QVBoxLayout(self)
+        root_layout.setSpacing(10)
+        root_layout.setContentsMargins(20, 20, 20, 20)
 
-        title = QLabel("新增料盘")
+        title = QLabel("编辑料盘" if self.edit_mode else "新增料盘")
         title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700;")
-        layout.addWidget(title)
+        root_layout.addWidget(title)
 
-        name_label = QLabel("料盘名称或型号:")
-        name_label.setStyleSheet(self._LABEL_STYLE)
-        layout.addWidget(name_label)
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(18)
+        root_layout.addLayout(content_layout, 1)
 
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("例如: LQFP 标准料盘")
-        self.name_input.setMinimumHeight(38)
-        self.name_input.setStyleSheet(self._FIELD_STYLE)
-        layout.addWidget(self.name_input)
+        left_panel = QWidget()
+        right_panel = QWidget()
+        content_layout.addWidget(left_panel, 1)
+        content_layout.addWidget(right_panel, 1)
+
+        layout = QVBoxLayout(left_panel)
+        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
         id_label = QLabel("料盘编号（唯一）:")
         id_label.setStyleSheet(self._LABEL_STYLE)
@@ -1006,6 +1053,7 @@ class AddTrayDialog(QDialog):
         self.id_input.setMinimumHeight(38)
         self.id_input.setStyleSheet(self._FIELD_STYLE)
         self.id_input.installEventFilter(self)
+        self.id_input.setEnabled(not self.edit_mode)
         id_row.addWidget(self.id_input, 1)
 
         keyboard_btn = QPushButton("键盘")
@@ -1096,9 +1144,16 @@ class AddTrayDialog(QDialog):
         pitch_row.addWidget(self._small_label("纵向间距"))
         self.pitch_y_spin = self._distance_spin(1.0)
         pitch_row.addWidget(self.pitch_y_spin)
+        self.pitch_unit_combo = QComboBox()
+        self.pitch_unit_combo.setMinimumHeight(38)
+        self.pitch_unit_combo.setStyleSheet(self._FIELD_STYLE)
+        self.pitch_unit_combo.addItem("mm", "mm")
+        self.pitch_unit_combo.addItem("脉冲", "pulses")
+        self.pitch_unit_combo.currentIndexChanged.connect(self._update_pitch_unit)
+        pitch_row.addWidget(self.pitch_unit_combo)
         layout.addLayout(pitch_row)
 
-        origin_label = QLabel("首个槽位原点坐标:")
+        origin_label = QLabel("首个槽位原点坐标（累计脉冲）:")
         origin_label.setStyleSheet(self._LABEL_STYLE)
         layout.addWidget(origin_label)
 
@@ -1114,10 +1169,58 @@ class AddTrayDialog(QDialog):
         self.origin_z_spin = self._coordinate_spin()
         origin_row.addWidget(self.origin_z_spin)
         layout.addLayout(origin_row)
+        layout.addStretch()
+
+        layout = right_layout
+
+        motion_label = QLabel("三轴控制（脉冲）:")
+        motion_label.setStyleSheet(self._LABEL_STYLE)
+        layout.addWidget(motion_label)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(8)
+        speed_row.addWidget(self._small_label("速度"))
+        self.motion_speed_spin = QSpinBox()
+        self.motion_speed_spin.setRange(1, 1000000)
+        self.motion_speed_spin.setValue(1000)
+        self.motion_speed_spin.setMinimumHeight(36)
+        self.motion_speed_spin.setStyleSheet(self._FIELD_STYLE)
+        self._enable_numeric_keyboard(self.motion_speed_spin, "输入运动速度")
+        speed_row.addWidget(self.motion_speed_spin, 1)
+        layout.addLayout(speed_row)
+
+        self.axis_step_spins = {}
+        for axis in ("X", "Y", "Z"):
+            axis_row = QHBoxLayout()
+            axis_row.setSpacing(8)
+            axis_row.addWidget(self._small_label(f"{axis}步长"))
+            step_spin = QSpinBox()
+            step_spin.setRange(1, 1000000)
+            step_spin.setValue(1000)
+            step_spin.setSingleStep(1000)
+            step_spin.setSuffix(" 脉冲")
+            step_spin.setMinimumHeight(36)
+            step_spin.setStyleSheet(self._FIELD_STYLE)
+            self._enable_numeric_keyboard(step_spin, f"输入 {axis} 轴步长")
+            self.axis_step_spins[axis.lower()] = step_spin
+            axis_row.addWidget(step_spin, 1)
+
+            minus_btn = QPushButton(f"{axis}-")
+            minus_btn.setFixedHeight(36)
+            minus_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
+            minus_btn.clicked.connect(lambda _=False, a=axis.lower(): self._request_jog(a, -1))
+            axis_row.addWidget(minus_btn)
+
+            plus_btn = QPushButton(f"{axis}+")
+            plus_btn.setFixedHeight(36)
+            plus_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
+            plus_btn.clicked.connect(lambda _=False, a=axis.lower(): self._request_jog(a, 1))
+            axis_row.addWidget(plus_btn)
+            layout.addLayout(axis_row)
 
         collect_row = QHBoxLayout()
         collect_row.setSpacing(8)
-        get_coord_btn = QPushButton("获取当前坐标")
+        get_coord_btn = QPushButton("获取当前坐标（设为原点）")
         get_coord_btn.setFixedHeight(38)
         get_coord_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
         get_coord_btn.clicked.connect(self._get_current_position)
@@ -1158,7 +1261,7 @@ class AddTrayDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
-        ok_btn = QPushButton("确认新增")
+        ok_btn = QPushButton("保存修改" if self.edit_mode else "确认新增")
         ok_btn.setFixedHeight(40)
         ok_btn.setStyleSheet(
             """
@@ -1176,9 +1279,10 @@ class AddTrayDialog(QDialog):
         ok_btn.clicked.connect(self._on_confirm)
         btn_layout.addWidget(ok_btn)
 
-        layout.addLayout(btn_layout)
+        root_layout.addLayout(btn_layout)
 
         self._update_custom_spec_state()
+        self._apply_initial_data()
 
     def eventFilter(self, obj, event):
         """在编号输入框上点击时自动弹软键盘。
@@ -1189,6 +1293,10 @@ class AddTrayDialog(QDialog):
         if obj is self.id_input and event.type() == QEvent.Type.MouseButtonPress:
             self._open_keyboard()
             return True
+        if obj in self._numeric_spin_editors and event.type() == QEvent.Type.MouseButtonPress:
+            spin, title = self._numeric_spin_editors[obj]
+            self._open_numeric_keyboard(spin, title)
+            return True
         return super().eventFilter(obj, event)
 
     def _open_keyboard(self):
@@ -1196,6 +1304,23 @@ class AddTrayDialog(QDialog):
         dlg = VirtualKeyboardDialog(self.id_input.text(), "输入料盘编号", self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.id_input.setText(dlg.get_text())
+
+    def _enable_numeric_keyboard(self, spin, title):
+        editor = spin.lineEdit()
+        editor.installEventFilter(self)
+        self._numeric_spin_editors[editor] = (spin, title)
+
+    def _open_numeric_keyboard(self, spin, title):
+        dlg = VirtualKeyboardDialog(str(int(spin.value())), title, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = dlg.get_text().strip()
+        try:
+            value = int(float(text))
+        except ValueError:
+            QMessageBox.warning(self, "提示", "请输入合法数字。")
+            return
+        spin.setValue(value)
 
     def _update_custom_spec_state(self, _index=None):
         """规格切换时同步行列 SpinBox；行列区始终显示，便于现场确认。"""
@@ -1222,11 +1347,8 @@ class AddTrayDialog(QDialog):
         if not tray_id:
             QMessageBox.warning(self, "提示", "请输入料盘编号。")
             return
-        if tray_id in self.existing_ids:
+        if tray_id in self.existing_ids and not self.edit_mode:
             QMessageBox.warning(self, "提示", f"编号 {tray_id} 已存在，请使用其他编号。")
-            return
-        if not self.name_input.text().strip():
-            QMessageBox.warning(self, "提示", "请输入料盘名称或型号。")
             return
         if self.rows_spin.value() <= 0 or self.cols_spin.value() <= 0:
             QMessageBox.warning(self, "提示", "行数、列数必须大于 0。")
@@ -1252,12 +1374,13 @@ class AddTrayDialog(QDialog):
         """返回完整料盘参数。"""
         return {
             "tray_id": self.get_tray_id(),
-            "name": self.name_input.text().strip(),
+            "name": self.get_tray_id(),
             "spec": self.get_spec_key(),
             "rows": self.rows_spin.value(),
             "cols": self.cols_spin.value(),
-            "pitch_x": self.pitch_x_spin.value(),
-            "pitch_y": self.pitch_y_spin.value(),
+            "pitch_x": self._pitch_x_pulses(),
+            "pitch_y": self._pitch_y_pulses(),
+            "pitch_unit": self.pitch_unit_combo.currentData(),
             "origin_x": self.origin_x_spin.value(),
             "origin_y": self.origin_y_spin.value(),
             "origin_z": self.origin_z_spin.value(),
@@ -1271,7 +1394,7 @@ class AddTrayDialog(QDialog):
 
     def _distance_spin(self, value):
         spin = QDoubleSpinBox()
-        spin.setRange(0.001, 10000.0)
+        spin.setRange(0.001, 1000000.0)
         spin.setDecimals(3)
         spin.setSingleStep(0.1)
         spin.setSuffix(" mm")
@@ -1282,10 +1405,10 @@ class AddTrayDialog(QDialog):
 
     def _coordinate_spin(self):
         spin = QDoubleSpinBox()
-        spin.setRange(-100000.0, 100000.0)
-        spin.setDecimals(3)
-        spin.setSingleStep(0.1)
-        spin.setSuffix(" mm")
+        spin.setRange(-10000000.0, 10000000.0)
+        spin.setDecimals(0)
+        spin.setSingleStep(1000)
+        spin.setSuffix(" 脉冲")
         spin.setMinimumHeight(38)
         spin.setStyleSheet(self._double_spin_style())
         return spin
@@ -1297,9 +1420,74 @@ class AddTrayDialog(QDialog):
         position = self.coordinate_provider()
         if not position:
             return
+        self.set_current_position(position)
+        self.origin_saved.emit({
+            "x": int(position["x"]),
+            "y": int(position["y"]),
+            "z": int(position["z"]),
+        })
+
+    def set_current_position(self, position):
         self.origin_x_spin.setValue(float(position["x"]))
         self.origin_y_spin.setValue(float(position["y"]))
         self.origin_z_spin.setValue(float(position["z"]))
+
+    def _request_jog(self, axis, direction):
+        step = int(self.axis_step_spins[axis].value())
+        speed = int(self.motion_speed_spin.value())
+        self.jog_requested.emit(axis, step * int(direction), speed)
+
+    def _update_pitch_unit(self):
+        if self.pitch_unit_combo.currentData() == "pulses":
+            for spin in (self.pitch_x_spin, self.pitch_y_spin):
+                spin.setDecimals(0)
+                spin.setSingleStep(1000)
+                spin.setSuffix(" 脉冲")
+        else:
+            for spin in (self.pitch_x_spin, self.pitch_y_spin):
+                spin.setDecimals(3)
+                spin.setSingleStep(0.1)
+                spin.setSuffix(" mm")
+
+    def _pitch_x_pulses(self):
+        value = self.pitch_x_spin.value()
+        if self.pitch_unit_combo.currentData() == "pulses":
+            return int(value)
+        return x_mm_to_pulses(value)
+
+    def _pitch_y_pulses(self):
+        value = self.pitch_y_spin.value()
+        if self.pitch_unit_combo.currentData() == "pulses":
+            return int(value)
+        return y_mm_to_pulses(value)
+
+    def _apply_initial_data(self):
+        if not self.initial_data:
+            return
+        tray_id = self.initial_data.get("tray_id") or self.initial_data.get("id")
+        if tray_id:
+            self.id_input.setText(str(tray_id))
+        rows = int(self.initial_data.get("rows", 3) or 3)
+        cols = int(self.initial_data.get("cols", 7) or 7)
+        self.rows_spin.setValue(rows)
+        self.cols_spin.setValue(cols)
+        spec_key = _build_spec_key(rows, cols)
+        index = self.spec_combo.findData(spec_key)
+        self.spec_combo.setCurrentIndex(index if index >= 0 else self.spec_combo.findData(CUSTOM_TRAY_SPEC_KEY))
+        self.pitch_unit_combo.setCurrentIndex(self.pitch_unit_combo.findData("pulses"))
+        self.pitch_x_spin.setValue(float(self.initial_data.get("pitchX") or 10000))
+        self.pitch_y_spin.setValue(float(self.initial_data.get("pitchY") or 10000))
+        origin = self.initial_data.get("firstSlotOrigin") or {}
+        self.origin_x_spin.setValue(float(origin.get("x") or 0))
+        self.origin_y_spin.setValue(float(origin.get("y") or 0))
+        self.origin_z_spin.setValue(float(origin.get("z") or 0))
+        self.light_config = dict(self.initial_data.get("lightConfig") or {})
+        if self.light_config:
+            self.light_summary.setText(
+                "光源配置："
+                f"1路 {float(self.light_config.get('light1Voltage', 0.0)):.2f} V，"
+                f"2路 {float(self.light_config.get('light2Voltage', 0.0)):.2f} V"
+            )
 
     def _open_light_adjustment(self):
         if self.light_adjuster is None:

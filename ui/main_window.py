@@ -13,7 +13,7 @@ import os
 import sys
 
 import cv2
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -44,10 +44,28 @@ from .dialogs import (
     AddTrayDialog,
     CameraCaptureDialog,
     LightAdjustDialog,
-    SlotMoveConfirmDialog,
     TemplateConfirmDialog,
 )
 from .material_slot import MaterialSlot
+
+
+class MotionTaskWorker(QThread):
+    """在后台执行单个运动控制任务，避免阻塞 Qt 主线程。"""
+
+    finished = Signal(object)
+
+    def __init__(self, task, parent=None):
+        super().__init__(parent)
+        self._task = task
+
+    def run(self):
+        try:
+            result = self._task()
+        except Exception as exc:
+            from motion import MotionCommandResult
+
+            result = MotionCommandResult(False, f"运动任务异常：{exc}")
+        self.finished.emit(result)
 
 
 class OCRApp(QMainWindow):
@@ -91,6 +109,7 @@ class OCRApp(QMainWindow):
         self.camera_worker = None   # 摄像头预览线程（懒启动）
         self.worker = None          # 正在运行的批量检测线程（None 表示空闲）
         self.live_worker = None     # 正在运行的实时识别线程（None 表示空闲）
+        self.motion_worker = None   # 正在运行的运动控制线程
         self.slots = []             # 当前料盘的槽位组件列表
         self.img_dir = None         # 用户选择的图像目录
         self.current_light_config = {"light1Voltage": 0.0, "light2Voltage": 0.0}
@@ -102,7 +121,7 @@ class OCRApp(QMainWindow):
 
         # 启动后立刻读取历史配置里的图像目录（若已保存过）
         self.check_image_directory()
-        QTimer.singleShot(0, self.ensure_startup_homing)
+        QTimer.singleShot(0, self.ensure_startup_motion_ready)
 
     def init_ui(self):
         """构建主窗口 UI：左（料盘网格+顶部控制）+ 右（摄像头/配置/任务）。
@@ -141,8 +160,7 @@ class OCRApp(QMainWindow):
 
         # 从 tray_manager 拉取全部料盘写入下拉（userData 用 tray_id 便于反查）
         for tray_id in self.services.tray_manager.get_tray_list():
-            tray_info = self.services.tray_manager.get_tray_info(tray_id)
-            self.tray_combo.addItem(tray_info["name"], tray_id)
+            self.tray_combo.addItem(tray_id, tray_id)
 
         self.tray_combo.currentIndexChanged.connect(self.on_tray_changed)
         top_control_layout.addWidget(self.tray_combo)
@@ -153,6 +171,12 @@ class OCRApp(QMainWindow):
         add_tray_btn.setStyleSheet(S.ADD_TRAY_BTN)
         add_tray_btn.clicked.connect(self.add_new_tray)
         top_control_layout.addWidget(add_tray_btn)
+
+        edit_tray_btn = QPushButton("编辑料盘")
+        edit_tray_btn.setMinimumHeight(42)
+        edit_tray_btn.setStyleSheet(S.ADD_TRAY_BTN)
+        edit_tray_btn.clicked.connect(self.edit_current_tray)
+        top_control_layout.addWidget(edit_tray_btn)
 
         # 删除料盘按钮（红色警示色）
         delete_tray_btn = QPushButton("－ 删除料盘")
@@ -298,41 +322,6 @@ class OCRApp(QMainWindow):
         light_btn.clicked.connect(lambda: self._run_light_adjustment(self.current_light_config))
         param_section_layout.addWidget(light_btn)
 
-        motion_title = QLabel("三轴点动")
-        motion_title.setStyleSheet(S.PARAM_LABEL)
-        param_section_layout.addWidget(motion_title)
-
-        step_layout = QHBoxLayout()
-        step_layout.setSpacing(5)
-        step_label = QLabel("步长:")
-        step_label.setStyleSheet(S.PARAM_LABEL)
-        step_layout.addWidget(step_label)
-        self.step_combo = QComboBox()
-        self.step_combo.setMinimumHeight(32)
-        self.step_combo.setStyleSheet(S.TRAY_COMBO)
-        for step in (0.01, 0.1, 1.0, 5.0, 10.0):
-            self.step_combo.addItem(f"{step:g} mm", step)
-        step_layout.addWidget(self.step_combo, 1)
-        param_section_layout.addLayout(step_layout)
-
-        for axis in ("X", "Y", "Z"):
-            axis_row = QHBoxLayout()
-            axis_row.setSpacing(5)
-            axis_label = QLabel(f"{axis}:")
-            axis_label.setStyleSheet(S.PARAM_LABEL)
-            axis_row.addWidget(axis_label)
-            minus_btn = QPushButton(f"{axis}-")
-            minus_btn.setMinimumHeight(28)
-            minus_btn.setStyleSheet(S.REFRESH_BUTTON)
-            minus_btn.clicked.connect(lambda _=False, a=axis: self.jog_axis(a, -1))
-            axis_row.addWidget(minus_btn)
-            plus_btn = QPushButton(f"{axis}+")
-            plus_btn.setMinimumHeight(28)
-            plus_btn.setStyleSheet(S.REFRESH_BUTTON)
-            plus_btn.clicked.connect(lambda _=False, a=axis: self.jog_axis(a, 1))
-            axis_row.addWidget(plus_btn)
-            param_section_layout.addLayout(axis_row)
-
         right_layout.addWidget(param_section, 2)
         
         # ---------- 区域 3：任务控制 ----------
@@ -363,15 +352,7 @@ class OCRApp(QMainWindow):
         self.live_btn.setMinimumHeight(38)
         self.live_btn.setStyleSheet(S.LIVE_BUTTON)
         self.live_btn.clicked.connect(self.start_live_inspection)
-        live_row.addWidget(self.live_btn, 3)
-
-        # 模式选择下拉（手动/自动预留），与按钮并排
-        self.live_mode_combo = QComboBox()
-        self.live_mode_combo.setMinimumHeight(38)
-        self.live_mode_combo.setStyleSheet(S.LIVE_MODE_COMBO)
-        self.live_mode_combo.addItem("手动", "manual")
-        self.live_mode_combo.addItem("自动(预留)", "auto")
-        live_row.addWidget(self.live_mode_combo, 2)
+        live_row.addWidget(self.live_btn)
 
         button_section_layout.addLayout(live_row)
 
@@ -434,6 +415,30 @@ class OCRApp(QMainWindow):
 
         rows, cols = self.services.tray_manager.get_tray_dimensions(tray_id)
         self._rebuild_grid(rows, cols)
+        self._move_to_current_tray_origin()
+
+    def _move_to_current_tray_origin(self):
+        """切换料盘后自动移动到该料盘首槽原点。"""
+        if not self.device_controller.is_initialized:
+            return
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            QMessageBox.warning(self, "提示", "运动任务进行中，已跳过本次料盘原点移动。")
+            return
+
+        tray_id = self.tray_combo.currentData()
+        try:
+            origin_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+        except ValueError as exc:
+            QMessageBox.warning(self, "料盘原点不可用", str(exc))
+            return
+
+        self._run_motion_task(
+            f"正在移动到料盘 {tray_id} 原点...",
+            lambda: self.device_controller.move_to_coordinate(
+                origin_coord["x"], origin_coord["y"], origin_coord["z"], self._motion_speed()
+            ),
+            show_success=False,
+        )
 
     def _rebuild_grid(self, rows, cols):
         """按新的 `(rows, cols)` 重建料位网格。
@@ -462,6 +467,22 @@ class OCRApp(QMainWindow):
         1. 以 `料盘 {tray_id}` 为默认名写入配置
         2. 追加到下拉末尾并切换过去（触发 `on_tray_changed` 重建网格）
         """
+        if not self.device_controller.is_initialized:
+            QMessageBox.warning(self, "禁止操作", "设备尚未回零，禁止新增料盘。")
+            return
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            QMessageBox.warning(self, "提示", "运动任务进行中，请等待完成后再新增料盘。")
+            return
+
+        self._run_motion_task(
+            "正在回到机械原点...",
+            self.device_controller.home,
+            on_success=lambda _result: self._open_add_tray_dialog(),
+            show_success=False,
+        )
+
+    def _open_add_tray_dialog(self):
+        """机械回零完成后打开新增料盘弹窗。"""
         dialog = AddTrayDialog(
             self.services.tray_manager.get_tray_list(),
             coordinate_provider=self._read_current_position_for_dialog,
@@ -470,6 +491,7 @@ class OCRApp(QMainWindow):
             ),
             parent=self,
         )
+        dialog.jog_requested.connect(lambda axis, pulses, speed: self._jog_axis_for_tray_dialog(dialog, axis, pulses, speed))
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -478,7 +500,7 @@ class OCRApp(QMainWindow):
         spec_key = tray_data["spec"]
         self.services.tray_manager.add_tray(
             tray_id,
-            name=tray_data["name"],
+            name=tray_id,
             description="",
             model="",
             angle=0,
@@ -487,6 +509,7 @@ class OCRApp(QMainWindow):
             cols=tray_data["cols"],
             pitch_x=tray_data["pitch_x"],
             pitch_y=tray_data["pitch_y"],
+            pitch_unit=tray_data.get("pitch_unit"),
             origin_x=tray_data["origin_x"],
             origin_y=tray_data["origin_y"],
             origin_z=tray_data["origin_z"],
@@ -494,8 +517,56 @@ class OCRApp(QMainWindow):
         )
 
         tray_info = self.services.tray_manager.get_tray_info(tray_id)
-        self.tray_combo.addItem(tray_info["name"], tray_id)
+        self.tray_combo.addItem(tray_id, tray_id)
         self.tray_combo.setCurrentIndex(self.tray_combo.count() - 1)
+        QMessageBox.information(self, "新增成功", f"料盘 {tray_id} 已新增。")
+
+    def edit_current_tray(self):
+        tray_id = self.tray_combo.currentData()
+        if not tray_id:
+            QMessageBox.warning(self, "提示", "当前没有选中的料盘。")
+            return
+        tray_info = self.services.tray_manager.get_tray_info(tray_id)
+        if not tray_info:
+            QMessageBox.warning(self, "提示", "当前料盘配置不存在。")
+            return
+
+        dialog = AddTrayDialog(
+            self.services.tray_manager.get_tray_list(),
+            coordinate_provider=self._read_current_position_for_dialog,
+            light_adjuster=lambda cfg: self._run_light_adjustment(
+                cfg, persist_to_current_tray=False
+            ),
+            parent=self,
+            initial_data={"tray_id": tray_id, **tray_info},
+            edit_mode=True,
+        )
+        dialog.jog_requested.connect(lambda axis, pulses, speed: self._jog_axis_for_tray_dialog(dialog, axis, pulses, speed))
+        dialog.origin_saved.connect(lambda position: self._save_tray_origin(tray_id, position))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        tray_data = dialog.get_tray_data()
+        self.services.tray_manager.update_tray(
+            tray_id,
+            name=tray_id,
+            spec=tray_data["spec"],
+            rows=tray_data["rows"],
+            cols=tray_data["cols"],
+            pitchX=tray_data["pitch_x"],
+            pitchY=tray_data["pitch_y"],
+            pitchUnit=tray_data.get("pitch_unit"),
+            firstSlotOrigin={
+                "x": tray_data["origin_x"],
+                "y": tray_data["origin_y"],
+                "z": tray_data["origin_z"],
+            },
+            lightConfig=tray_data.get("light_config", {}),
+        )
+        index = self.tray_combo.currentIndex()
+        self.tray_combo.setItemText(index, tray_id)
+        self.on_tray_changed()
+        QMessageBox.information(self, "保存成功", f"料盘 {tray_id} 已更新。")
 
     def delete_current_tray(self):
         """删除当前下拉里选中的料盘。
@@ -520,12 +591,10 @@ class OCRApp(QMainWindow):
             QMessageBox.warning(self, "提示", "检测任务进行中，请结束后再删除。")
             return
 
-        tray_info = self.services.tray_manager.get_tray_info(tray_id)
-        name = tray_info["name"] if tray_info else tray_id
         reply = QMessageBox.question(
             self,
             "确认删除",
-            f"确定删除 {name} (编号 {tray_id}) 吗？此操作不可撤销。",
+            f"确定删除料盘 {tray_id} 吗？此操作不可撤销。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -543,67 +612,40 @@ class OCRApp(QMainWindow):
         index = self.tray_combo.currentIndex()
         self.tray_combo.removeItem(index)
 
-    def ensure_startup_homing(self):
-        """启动后强制执行回零，完成前不开放正式操作界面。"""
-        if self.device_controller.is_initialized:
-            self.centralWidget().setEnabled(True)
-            self._ensure_tray_selected_on_entry()
-            return
+    def ensure_startup_motion_ready(self):
+        """软件启动后自动连接 Modbus RTU 并触发真实机械回零。"""
+        self._ensure_tray_selected_on_entry()
+        self._run_motion_task(
+            "正在连接控制器并等待机械回零完成...",
+            lambda: self._connect_then_home(),
+            on_success=self._on_motion_ready,
+            on_failure=self._on_startup_motion_failed,
+            show_success=False,
+        )
 
-        while not self.device_controller.is_initialized:
-            if self.device_controller.simulation_enabled:
-                homing_message = (
-                    "当前处于模拟回零测试模式。\n\n"
-                    "确认后软件会模拟下位机返回“回零完成”，用于开机流程测试；"
-                    "后续上线真实设备时关闭模拟模式并配置 RS485 串口即可。"
-                )
-                progress_text = "正在执行模拟回零..."
-            else:
-                homing_message = (
-                    "设备开机后必须先执行 X/Y/Z 三轴回零。\n\n"
-                    "确认后上位机将通过 RS485 向下位机发送回零指令，"
-                    "收到“回零完成”反馈后才能进入操作界面。"
-                )
-                progress_text = "正在等待下位机回零完成..."
+    def _connect_then_home(self):
+        port = getattr(self.device_controller, "port", "COM14")
+        result = self.device_controller.connect(port)
+        if not result.success:
+            return result
+        return self.device_controller.home()
 
-            reply = QMessageBox.question(
-                self,
-                "设备需要回零",
-                homing_message,
-                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Ok,
-            )
-            if reply != QMessageBox.StandardButton.Ok:
-                QMessageBox.warning(self, "禁止进入", "用户取消回零，软件将保持锁定并退出。")
-                self.close()
-                return
+    def _on_motion_ready(self, result):
+        self.centralWidget().setEnabled(True)
+        self.statusBar().showMessage(result.message, 3000)
 
-            progress = QProgressDialog(progress_text, "", 0, 0, self)
-            progress.setWindowTitle("设备回零")
-            progress.setCancelButton(None)
-            progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            progress.show()
-            QApplication.processEvents()
-
-            result = self.device_controller.home()
-            progress.close()
-
-            if result.success:
-                self.centralWidget().setEnabled(True)
-                self._ensure_tray_selected_on_entry()
-                QMessageBox.information(self, "回零完成", result.message)
-                return
-
-            retry = QMessageBox.warning(
-                self,
-                "回零失败",
-                f"{result.message}\n\n请检查 485 通讯、下位机状态和急停/限位后重试。",
-                QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
-                QMessageBox.StandardButton.Retry,
-            )
-            if retry != QMessageBox.StandardButton.Retry:
-                self.close()
-                return
+    def _on_startup_motion_failed(self, result):
+        retry = QMessageBox.warning(
+            self,
+            "回零未完成",
+            f"{result.message}\n\n软件会保持锁定，请排查控制器、串口和限位状态后重试。",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
+            QMessageBox.StandardButton.Retry,
+        )
+        if retry == QMessageBox.StandardButton.Retry:
+            QTimer.singleShot(0, self.ensure_startup_motion_ready)
+        else:
+            self.close()
 
     def _ensure_tray_selected_on_entry(self):
         """进入操作界面后确保至少选中一个料盘。"""
@@ -628,16 +670,40 @@ class OCRApp(QMainWindow):
                 return False
         return True
 
-    def jog_axis(self, axis, direction):
-        """按当前步长点动单轴。"""
-        if not self._validate_before_operation():
+    def _run_motion_task(self, title, task, on_success=None, on_failure=None, show_success=True):
+        """在后台线程执行运动控制任务，并把结果回到主线程处理。"""
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            QMessageBox.warning(self, "运动任务进行中", "请等待当前运动任务完成后再操作。")
             return
-        step = float(self.step_combo.currentData() or 0.0) * direction
-        result = self.device_controller.move_axis(axis, step)
-        if not result.success:
-            QMessageBox.warning(self, "运动失败", result.message)
-            return
-        self.statusBar().showMessage(result.message, 3000)
+
+        progress = QProgressDialog(title, "", 0, 0, self)
+        progress.setWindowTitle("运动控制")
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.show()
+
+        worker = MotionTaskWorker(task, self)
+        self.motion_worker = worker
+
+        def handle_finished(result):
+            progress.close()
+            self.motion_worker = None
+            if result.success:
+                if on_success is not None:
+                    on_success(result)
+                if show_success:
+                    self.statusBar().showMessage(result.message, 3000)
+            else:
+                if on_failure is not None:
+                    on_failure(result)
+                else:
+                    QMessageBox.warning(self, "运动失败", result.message)
+
+        worker.finished.connect(handle_finished)
+        worker.start()
+
+    def _motion_speed(self):
+        return 1000
 
     def move_to_slot(self, slot_index):
         """点击槽位后，按料盘几何参数计算坐标并确认移动。"""
@@ -655,18 +721,19 @@ class OCRApp(QMainWindow):
             self,
             "移动到槽位",
             f"确定移动到槽位 {slot_no} 吗？\n\n"
-            f"目标坐标：X={coord['x']:.3f}, Y={coord['y']:.3f}, Z={coord['z']:.3f}",
+            f"目标坐标：X={int(coord['x'])}, Y={int(coord['y'])}, Z={int(coord['z'])} 脉冲",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        result = self.device_controller.move_to_coordinate(coord["x"], coord["y"], coord["z"])
-        if not result.success:
-            QMessageBox.warning(self, "运动失败", result.message)
-            return
-        self.statusBar().showMessage(result.message, 3000)
+        self._run_motion_task(
+            f"正在移动到槽位 {slot_no}...",
+            lambda: self.device_controller.move_to_coordinate(
+                coord["x"], coord["y"], coord["z"], self._motion_speed()
+            ),
+        )
 
     def _read_current_position_for_dialog(self):
         """供新增料盘弹窗读取当前三轴坐标。"""
@@ -677,6 +744,37 @@ class OCRApp(QMainWindow):
             QMessageBox.warning(self, "读取坐标失败", result.message)
             return None
         return result.data
+
+    def _jog_axis_for_tray_dialog(self, dialog, axis, pulses, speed):
+        """新增/编辑料盘弹窗里的三轴点动。"""
+        if not self._validate_before_operation():
+            return
+
+        def after_move(result):
+            position = result.data.get("position") or {}
+            if position:
+                dialog.set_current_position(position)
+
+        self._run_motion_task(
+            f"{axis.upper()}轴点动 {int(pulses)} 脉冲...",
+            lambda: self.device_controller.move_axis_pulses(axis, int(pulses), int(speed)),
+            on_success=after_move,
+            show_success=False,
+        )
+
+    def _save_tray_origin(self, tray_id, position):
+        """编辑料盘时，获取当前坐标即确认并保存该料盘原点。"""
+        if not tray_id or not position:
+            return
+        self.services.tray_manager.update_tray(
+            tray_id,
+            firstSlotOrigin={
+                "x": int(position.get("x", 0)),
+                "y": int(position.get("y", 0)),
+                "z": int(position.get("z", 0)),
+            },
+        )
+        self.statusBar().showMessage(f"料盘 {tray_id} 原点已保存", 3000)
 
     def _run_light_adjustment(self, initial_config=None, persist_to_current_tray=True):
         """打开调光面板并返回保存后的两路光源参数。"""
@@ -807,7 +905,9 @@ class OCRApp(QMainWindow):
                 "error": self.services.template_manager.last_error,
             }
 
-        detected_texts = [str(text) for text in result.get("texts", [])]
+        detected_texts = [
+            str(text) for text in (result.get("all_texts") or result.get("texts", []))
+        ]
         detected_model = ""
         if detected_texts:
             detected_model = self.services.template_manager._normalize_model_text(
@@ -1156,12 +1256,11 @@ class OCRApp(QMainWindow):
         - 批量检测和实时识别互斥，同时只能运行一个；
 
         执行流程：
-        1. 建立新的 CSV 批次记录；
-        2. 重置所有槽位为待机；
-        3. 启动 ``LiveInspectionWorker`` 线程，第一个槽位直接开始识别，
-           后续每个槽位等待工人点击"确认已就位"。
+        1. 先移动到当前料盘的首个槽位原点；
+        2. 建立新的 CSV 批次记录并重置所有槽位；
+        3. 启动 ``LiveInspectionWorker``，后续槽位由 UI 自动移槽后继续。
         """
-        if not self._validate_before_operation():
+        if not self._validate_before_operation(require_motion_params=True):
             return
 
         if not self.camera_worker or not self.camera_worker.isRunning():
@@ -1172,21 +1271,37 @@ class OCRApp(QMainWindow):
                 (self.live_worker is not None and self.live_worker.isRunning()):
             QMessageBox.warning(self, "提示", "已有任务运行中，请等待完成后再启动实时识别。")
             return
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            QMessageBox.warning(self, "提示", "运动任务进行中，请等待完成后再启动实时识别。")
+            return
 
         tray_id = self.tray_combo.currentData()
+        try:
+            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+        except ValueError as exc:
+            QMessageBox.warning(self, "坐标计算失败", str(exc))
+            return
+
+        self.start_btn.setEnabled(False)
+        self.live_btn.setEnabled(False)
+        self._run_motion_task(
+            "正在移动到槽位 1...",
+            lambda: self.device_controller.move_to_coordinate(
+                first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
+            ),
+            on_success=lambda _result: self._start_live_worker(tray_id),
+            on_failure=self._on_live_start_motion_failed,
+            show_success=False,
+        )
+
+    def _start_live_worker(self, tray_id):
+        """首槽移动到位后启动实时识别线程。"""
         self.services.data_logger.start_new_batch(
             tray_id, expected_slots=len(self.slots),
         )
 
-        # 禁用两个启动按钮，防止重入
-        self.start_btn.setEnabled(False)
-        self.live_btn.setEnabled(False)
-        self.live_mode_combo.setEnabled(False)
-
         for slot in self.slots:
             slot.reset()
-
-        mode = self.live_mode_combo.currentData()
 
         self.live_worker = LiveInspectionWorker(
             engine=self.services.engine,
@@ -1195,62 +1310,90 @@ class OCRApp(QMainWindow):
             target_a=self.angle_input.text(),
             data_logger=self.services.data_logger,
             total_slots=len(self.slots),
-            rs485=None,   # RS485 接口预留，暂不接入
-            mode=mode,
+            mode="auto",
         )
         self.live_worker.slot_recognized.connect(self.update_slot_ui)
         self.live_worker.request_move_confirm.connect(self.on_live_request_move_confirm)
         self.live_worker.all_done.connect(self.on_live_all_done)
         self.live_worker.start()
 
-    def on_live_request_move_confirm(self, next_slot_index):
-        """实时识别线程发出"请移至下一槽位"请求时在主线程弹出确认对话框。
+    def _on_live_start_motion_failed(self, result):
+        self.start_btn.setEnabled(True)
+        self.live_btn.setEnabled(True)
+        QMessageBox.warning(self, "实时识别启动失败", result.message)
 
-        - 用户点"确认已就位" → accept → 调 ``live_worker.confirm_move()``；
-        - 用户点"停止实时识别" → reject → 调 ``live_worker.stop()``。
+    def on_live_request_move_confirm(self, next_slot_index):
+        """实时识别线程请求下一槽位时，自动移动并继续识别。
 
         Parameters
         ----------
         next_slot_index : int
             下一个待识别的槽位索引（0 基准）；对话框显示时转成 1 基准。
         """
-        # next_slot_index 是 0 基准的"下一个"槽位；刚识别完的是它的前一个
-        done_index = next_slot_index - 1   # 0 基准，刚识别完的槽位
-        if 0 <= done_index < len(self.slots):
-            slot_widget = self.slots[done_index]
-            current_status = slot_widget.status_text or "—"
-            current_color = slot_widget.color_key or "default"
-        else:
-            current_status = "—"
-            current_color = "default"
+        tray_id = self.tray_combo.currentData()
+        try:
+            coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, next_slot_index)
+        except ValueError as exc:
+            QMessageBox.warning(self, "自动移槽失败", str(exc))
+            self.live_worker.stop()
+            return
 
-        dialog = SlotMoveConfirmDialog(
-            current_slot=next_slot_index,        # 刚完成的槽位（1基准）
-            next_slot=next_slot_index + 1,       # 下一个槽位（1基准）
-            current_status=current_status,
-            current_color=current_color,
-            total_slots=len(self.slots),
-            parent=self,
+        def after_move(_result):
+            if self.live_worker is not None:
+                self.live_worker.confirm_move()
+
+        self._run_motion_task(
+            f"自动移动到槽位 {next_slot_index + 1}...",
+            lambda: self.device_controller.move_to_coordinate(
+                coord["x"], coord["y"], coord["z"], self._motion_speed()
+            ),
+            on_success=after_move,
+            on_failure=self._on_live_move_failed,
+            show_success=False,
         )
 
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # 工人确认就位，解除工作线程阻塞
-            self.live_worker.confirm_move()
-        else:
-            # 工人主动停止
+    def _on_live_move_failed(self, result):
+        if self.live_worker is not None:
             self.live_worker.stop()
+        QMessageBox.warning(self, "自动移槽失败", result.message)
 
     def on_live_all_done(self):
         """实时识别线程全部完成后的回调（在主线程执行）。
 
         与批量检测 ``on_task_finished`` 对称：保存截图、恢复按钮、弹提示。
         """
+        self.live_worker = None
         self.services.data_logger.save_ui_screenshot(self)
+        tray_id = self.tray_combo.currentData()
+        try:
+            origin_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+        except ValueError as exc:
+            self.start_btn.setEnabled(True)
+            self.live_btn.setEnabled(True)
+            QMessageBox.warning(self, "回原点失败", str(exc))
+            self.setFocus()
+            return
+
+        self._run_motion_task(
+            "识别完成，正在返回料盘原点...",
+            lambda: self.device_controller.move_to_coordinate(
+                origin_coord["x"], origin_coord["y"], origin_coord["z"], self._motion_speed()
+            ),
+            on_success=self._on_live_return_origin_done,
+            on_failure=self._on_live_return_origin_failed,
+            show_success=False,
+        )
+
+    def _on_live_return_origin_done(self, _result):
         self.start_btn.setEnabled(True)
         self.live_btn.setEnabled(True)
-        self.live_mode_combo.setEnabled(True)
-        self.live_worker = None
-        QMessageBox.information(self, "完成", "实时识别已完成！")
+        QMessageBox.information(self, "完成", "实时识别已完成，并已返回料盘原点。")
+        self.setFocus()
+
+    def _on_live_return_origin_failed(self, result):
+        self.start_btn.setEnabled(True)
+        self.live_btn.setEnabled(True)
+        QMessageBox.warning(self, "回原点失败", f"实时识别已完成，但返回料盘原点失败：{result.message}")
         self.setFocus()
 
     def check_image_directory(self):

@@ -219,6 +219,7 @@ class TrayManager:
         cols=None,
         pitch_x=None,
         pitch_y=None,
+        pitch_unit=None,
         origin_x=None,
         origin_y=None,
         origin_z=None,
@@ -247,6 +248,7 @@ class TrayManager:
             "cols": int(cols),
             "pitchX": float(pitch_x) if pitch_x is not None else None,
             "pitchY": float(pitch_y) if pitch_y is not None else None,
+            "pitchUnit": pitch_unit or "pulses",
             "firstSlotOrigin": {
                 "x": float(origin_x) if origin_x is not None else None,
                 "y": float(origin_y) if origin_y is not None else None,

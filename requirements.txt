@@ -8,7 +8,8 @@ PySide6==6.10.3
 # 摄像头采集与图像处理
 opencv-python==4.11.0.86
 
-# 485/串口通讯
+# Modbus RTU / 串口通讯
+pymodbus==3.8.6
 pyserial==3.5
 
 # 文本检测 DB 后处理多边形外扩

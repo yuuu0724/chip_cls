@@ -2,19 +2,16 @@
 
 工作流程（每个槽位）
 --------------------
-1. 若不是第一个槽位，发出 ``request_move_confirm`` 信号，等待工人确认（手动模式）
-   或 RS485 到位信号（自动模式）；
+1. 若不是第一个槽位，发出 ``request_move_confirm`` 信号，等待 UI 自动移槽完成；
 2. 在约 1 秒内连续采集 3 帧摄像头图像，逐帧调用 OCR 引擎推理；
 3. 三帧识别结果（status）完全一致 → 视为该槽位识别成功；否则重新采集，
    最多重试 ``_MAX_RETRY_ROUNDS`` 轮；
 4. 将最终结果通过 ``slot_recognized`` 信号回到主线程更新 UI，
-   并调用 RS485 预留接口（如果已绑定）。
+   UI 可在自动模式下先执行运动控制，再调用 ``confirm_move()``。
 
 模式
 ----
-- ``"manual"``：每次切换槽位都等待 UI 层确认回调（``confirm_move()``）。
-- ``"auto"``：预留，逻辑与 manual 相同，由 ``RS485Interface.on_slot_move_done``
-  在适当时候调用 ``confirm_move()`` 驱动。
+``mode`` 保留为日志字段；当前 UI 统一按自动移槽流程调用 ``confirm_move()``。
 
 线程安全
 --------
@@ -66,10 +63,8 @@ class LiveInspectionWorker(QThread):
         target_a,
         data_logger,
         total_slots,
-        rs485=None,
-        mode="manual",
+        mode="auto",
         parent=None,
-        rs232=None,
     ):
         """
         Parameters
@@ -86,10 +81,8 @@ class LiveInspectionWorker(QThread):
             CSV 日志记录器。
         total_slots : int
             当前料盘总槽位数。
-        rs485 : RS485Interface | None
-            RS485 通信接口；None 时跳过通信调用。
         mode : str
-            ``"manual"`` 或 ``"auto"``（自动模式预留，当前与手动等价）。
+            日志字段，当前由 UI 统一使用 ``"auto"``。
         """
         super().__init__(parent)
         self.engine = engine
@@ -98,12 +91,11 @@ class LiveInspectionWorker(QThread):
         self.target_a = target_a
         self.data_logger = data_logger
         self.total_slots = total_slots
-        self.rs485 = rs485 if rs485 is not None else rs232
         self.mode = mode
 
         # 停止标志；外部调用 stop() 后置 True
         self._stop_flag = False
-        # 槽位移动确认事件；工人点"确认"或 RS485 回调后 set()
+        # 槽位移动确认事件；工人点"确认"或 UI 自动移槽完成后 set()
         self._move_confirmed = threading.Event()
 
     # ------------------------------------------------------------------
@@ -129,6 +121,24 @@ class LiveInspectionWorker(QThread):
     # ------------------------------------------------------------------
     # 内部推理逻辑
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_texts_with_scores(result):
+        parts = []
+        for item in result.get("items", []) or []:
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            try:
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                score = 0.0
+            parts.append(f"{text}({score:.2%})")
+        if parts:
+            return "|".join(parts)
+
+        texts = result.get("all_texts") or result.get("texts", [])
+        return "|".join(str(text) for text in texts)
 
     def _capture_and_infer(self):
         """从 CameraWorker 读最新一帧并推理。
@@ -226,11 +236,11 @@ class LiveInspectionWorker(QThread):
             if self._stop_flag:
                 break
 
-            # 非首个槽位：等待工人将摄像头移至新位置并确认
+            # 非首个槽位：等待 UI 自动移动到新槽位并确认
             if slot_index > 0:
                 self._move_confirmed.clear()
                 self.request_move_confirm.emit(slot_index)
-                # 手动 / 自动模式均等待 confirm_move() 回调
+                # UI 自动移槽完成后调用 confirm_move()
                 self._move_confirmed.wait()
 
                 if self._stop_flag:
@@ -245,13 +255,12 @@ class LiveInspectionWorker(QThread):
             # 写 CSV 日志（1 基准编号）
             texts = result.get("texts", [])
             angle = result.get("angle", 0)
-            self.data_logger.log_result(slot_index + 1, "|".join(texts), angle, status)
-
-            # 通知 RS485 接口（预留，None 时跳过）
-            if self.rs485 is not None:
-                self.rs485.on_slot_recognized(
-                    slot_index + 1, {"status": status, "color": color}
-                )
+            self.data_logger.log_result(
+                slot_index + 1,
+                self._format_texts_with_scores(result),
+                angle,
+                status,
+            )
 
             # 通知 UI 更新槽位显示
             self.slot_recognized.emit(slot_index, status, color)
