@@ -347,6 +347,7 @@ class CameraCaptureDialog(QDialog):
         self.camera_worker = camera_worker
         self.captured_path = None
         self._last_pixmap = None
+        self._last_frame_bgr = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -411,13 +412,15 @@ class CameraCaptureDialog(QDialog):
         if self.camera_worker:
             self.camera_worker.frame_ready.connect(self._on_frame)
 
-    def _on_frame(self, pixmap):
+    def _on_frame(self, pixmap, frame_bgr=None):
         """CameraWorker 的 `frame_ready` 槽。
 
-        保留原始 pixmap 供拍摄时用（保持最大分辨率），
+        保留与预览 pixmap 同帧的 BGR 图，拍摄时直接落盘。
         展示时再按 preview_label 的大小做保形缩放。
         """
         self._last_pixmap = pixmap
+        if frame_bgr is not None:
+            self._last_frame_bgr = frame_bgr.copy()
         scaled = pixmap.scaled(
             self.preview_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -427,10 +430,15 @@ class CameraCaptureDialog(QDialog):
 
     def _capture(self):
         """按下"拍摄"按钮：把当前最后一帧原图落盘到临时路径并关闭对话框。"""
-        if not self._last_pixmap:
+        if self._last_frame_bgr is None and not self._last_pixmap:
             return
         self.captured_path = os.path.join(tempfile.gettempdir(), "ocr_ref_capture.png")
-        self._last_pixmap.save(self.captured_path)
+        if self._last_frame_bgr is not None:
+            import cv2
+
+            cv2.imwrite(self.captured_path, self._last_frame_bgr)
+        else:
+            self._last_pixmap.save(self.captured_path)
         self.accept()
 
     def get_captured_path(self):
@@ -597,8 +605,10 @@ class LightAdjustDialog(QDialog):
         spin.valueChanged.connect(lambda _value: self._apply_timer.start(250))
         return spin
 
-    def _on_frame(self, pixmap):
-        frame = getattr(self.camera_worker, "current_frame_bgr", None)
+    def _on_frame(self, pixmap, frame_bgr=None):
+        frame = frame_bgr
+        if frame is None:
+            frame = getattr(self.camera_worker, "current_frame_bgr", None)
         if frame is None:
             scaled = pixmap.scaled(
                 self.preview_label.size(),
@@ -657,6 +667,7 @@ class LightAdjustDialog(QDialog):
             return display_frame
 
         angle = int(result.get("angle", 0) or 0)
+        box_coordinate = str(result.get("box_coordinate", "upright"))
         frame_h, frame_w = frame_bgr.shape[:2]
         for item in result.get("items", []):
             box = item.get("box")
@@ -665,12 +676,17 @@ class LightAdjustDialog(QDialog):
             if not box or not text:
                 continue
 
-            pts = self._map_ocr_box_to_preview(
-                np.array(box, dtype=np.float32),
-                angle,
-                frame_w,
-                frame_h,
-            ).astype(np.int32).reshape(-1, 1, 2)
+            box_points = np.array(box, dtype=np.float32)
+            if box_coordinate == "original":
+                pts = box_points
+            else:
+                pts = self._map_ocr_box_to_preview(
+                    box_points,
+                    angle,
+                    frame_w,
+                    frame_h,
+                )
+            pts = pts.astype(np.int32).reshape(-1, 1, 2)
             cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2)
             x = max(int(pts[:, 0, 0].min()), 0)
             y = max(int(pts[:, 0, 1].min()) - 8, 18)

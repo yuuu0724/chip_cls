@@ -154,7 +154,10 @@ class LiveInspectionWorker(QThread):
             logger.warning("摄像头帧为空，无法推理")
             return "识别失败", "red", {"texts": [], "angle": 0, "status": "error: no frame"}
 
-        result = self.engine.predict_image_from_array(frame)
+        result = self.engine.predict_image_from_array(
+            frame,
+            target_angle=self.target_a,
+        )
         raw_status = str(result.get("status", ""))
 
         if raw_status.startswith("error"):

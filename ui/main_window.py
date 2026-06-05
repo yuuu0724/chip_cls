@@ -11,10 +11,11 @@
 """
 import os
 import sys
+import time
 
 import cv2
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -68,6 +69,30 @@ class MotionTaskWorker(QThread):
         self.finished.emit(result)
 
 
+class ChipPreviewWorker(QThread):
+    """后台跑芯片检测，避免摄像头预览线程被 ONNX 推理卡住。"""
+
+    result_ready = Signal(object)
+
+    def __init__(self, engine, frame_bgr, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.frame_bgr = frame_bgr
+
+    def run(self):
+        try:
+            result = self.engine.detect_chip_preview(self.frame_bgr)
+        except Exception as exc:
+            h, w = self.frame_bgr.shape[:2] if self.frame_bgr is not None else (0, 0)
+            result = {
+                "chips": [],
+                "selected_index": -1,
+                "image_shape": [int(h), int(w)],
+                "status": f"error: {exc}",
+            }
+        self.result_ready.emit(result)
+
+
 class OCRApp(QMainWindow):
     """主窗口。
 
@@ -110,10 +135,15 @@ class OCRApp(QMainWindow):
         self.worker = None          # 正在运行的批量检测线程（None 表示空闲）
         self.live_worker = None     # 正在运行的实时识别线程（None 表示空闲）
         self.motion_worker = None   # 正在运行的运动控制线程
+        self.chip_preview_worker = None
         self.slots = []             # 当前料盘的槽位组件列表
         self.img_dir = None         # 用户选择的图像目录
         self.current_light_config = {"light1Voltage": 0.0, "light2Voltage": 0.0}
         self.grayscale_enabled = False
+        self.binary_enabled = False
+        self.chip_preview_result = None
+        self.chip_preview_last_started = 0.0
+        self.chip_preview_interval_seconds = 0.35
 
         self.init_ui()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -250,12 +280,25 @@ class OCRApp(QMainWindow):
         self.camera_frame.setText("无摄像头信号")
         camera_section_layout.addWidget(self.camera_frame, 1)
 
+        image_mode_layout = QHBoxLayout()
+        image_mode_layout.setSpacing(6)
+        image_mode_layout.setContentsMargins(0, 4, 0, 0)
+
         self.grayscale_btn = QPushButton("灰度图像：关")
         self.grayscale_btn.setCheckable(True)
         self.grayscale_btn.setMinimumHeight(30)
         self.grayscale_btn.setStyleSheet(S.GRAYSCALE_TOGGLE_BUTTON)
         self.grayscale_btn.clicked.connect(self.toggle_grayscale_mode)
-        camera_section_layout.addWidget(self.grayscale_btn)
+        image_mode_layout.addWidget(self.grayscale_btn)
+
+        self.binary_btn = QPushButton("二值图像：关")
+        self.binary_btn.setCheckable(True)
+        self.binary_btn.setMinimumHeight(30)
+        self.binary_btn.setStyleSheet(S.GRAYSCALE_TOGGLE_BUTTON)
+        self.binary_btn.clicked.connect(self.toggle_binary_mode)
+        image_mode_layout.addWidget(self.binary_btn)
+
+        camera_section_layout.addLayout(image_mode_layout)
 
         # 启动预览线程（异步打开摄像头，失败时 label 保持占位文字）
         self.start_camera_preview()
@@ -467,11 +510,22 @@ class OCRApp(QMainWindow):
         1. 以 `料盘 {tray_id}` 为默认名写入配置
         2. 追加到下拉末尾并切换过去（触发 `on_tray_changed` 重建网格）
         """
-        if not self.device_controller.is_initialized:
-            QMessageBox.warning(self, "禁止操作", "设备尚未回零，禁止新增料盘。")
-            return
         if self.motion_worker is not None and self.motion_worker.isRunning():
             QMessageBox.warning(self, "提示", "运动任务进行中，请等待完成后再新增料盘。")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "新增料盘",
+            "新增料盘前是否先执行机械复位？\n\n"
+            "选择“否”将直接打开新增料盘窗口，可手动填写原点坐标。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+        if reply == QMessageBox.StandardButton.No:
+            self._open_add_tray_dialog()
             return
 
         self._run_motion_task(
@@ -613,8 +667,26 @@ class OCRApp(QMainWindow):
         self.tray_combo.removeItem(index)
 
     def ensure_startup_motion_ready(self):
-        """软件启动后自动连接 Modbus RTU 并触发真实机械回零。"""
+        """软件启动后连接 Modbus RTU，并由用户决定是否机械复位。"""
         self._ensure_tray_selected_on_entry()
+        reply = QMessageBox.question(
+            self,
+            "机械复位",
+            "是否现在执行机械复位？\n\n"
+            "选择“否”将只连接控制器并进入软件，后续运动操作仍需先完成复位。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.No:
+            self._run_motion_task(
+                "正在连接控制器...",
+                lambda: self._connect_only(),
+                on_success=self._on_motion_ready,
+                on_failure=self._on_startup_connect_failed,
+                show_success=False,
+            )
+            return
+
         self._run_motion_task(
             "正在连接控制器并等待机械回零完成...",
             lambda: self._connect_then_home(),
@@ -622,6 +694,10 @@ class OCRApp(QMainWindow):
             on_failure=self._on_startup_motion_failed,
             show_success=False,
         )
+
+    def _connect_only(self):
+        port = getattr(self.device_controller, "port", "COM14")
+        return self.device_controller.connect(port)
 
     def _connect_then_home(self):
         port = getattr(self.device_controller, "port", "COM14")
@@ -647,21 +723,38 @@ class OCRApp(QMainWindow):
         else:
             self.close()
 
+    def _on_startup_connect_failed(self, result):
+        reply = QMessageBox.warning(
+            self,
+            "控制器未连接",
+            f"{result.message}\n\n是否重试连接？选择“否”将进入软件，但运动控制不可用。",
+            QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Close,
+            QMessageBox.StandardButton.Retry,
+        )
+        if reply == QMessageBox.StandardButton.Retry:
+            QTimer.singleShot(0, self.ensure_startup_motion_ready)
+        elif reply == QMessageBox.StandardButton.No:
+            self.centralWidget().setEnabled(True)
+            self.statusBar().showMessage("控制器未连接，运动控制不可用。", 5000)
+        else:
+            self.close()
+
     def _ensure_tray_selected_on_entry(self):
         """进入操作界面后确保至少选中一个料盘。"""
         if self.tray_combo.count() <= 0 or not self.tray_combo.currentData():
             QMessageBox.information(self, "请选择料盘", "请先选择已有料盘，或新增一个料盘。")
 
-    def _validate_before_operation(self, require_motion_params=False):
-        """统一校验设备回零、料盘选择和运动参数。"""
-        if not self.device_controller.is_initialized:
-            QMessageBox.warning(self, "禁止操作", "设备尚未回零，禁止执行该操作。")
-            return False
-
+    def _validate_before_operation(self, require_motion_params=False, require_motion_ready=False):
+        """统一校验料盘选择、运动复位状态和运动参数。"""
         tray_id = self.tray_combo.currentData()
         if not tray_id:
             QMessageBox.warning(self, "提示", "请先选择或新增料盘。")
             return False
+
+        if require_motion_ready or require_motion_params:
+            if not self.device_controller.is_initialized:
+                QMessageBox.warning(self, "禁止操作", "设备尚未复位，禁止执行运动操作。")
+                return False
 
         if require_motion_params:
             ok, message = self.services.tray_manager.is_tray_config_complete(tray_id)
@@ -737,7 +830,7 @@ class OCRApp(QMainWindow):
 
     def _read_current_position_for_dialog(self):
         """供新增料盘弹窗读取当前三轴坐标。"""
-        if not self._validate_before_operation():
+        if not self._validate_before_operation(require_motion_ready=True):
             return None
         result = self.device_controller.request_current_position()
         if not result.success:
@@ -747,7 +840,7 @@ class OCRApp(QMainWindow):
 
     def _jog_axis_for_tray_dialog(self, dialog, axis, pulses, speed):
         """新增/编辑料盘弹窗里的三轴点动。"""
-        if not self._validate_before_operation():
+        if not self._validate_before_operation(require_motion_ready=True):
             return
 
         def after_move(result):
@@ -803,14 +896,22 @@ class OCRApp(QMainWindow):
         """
         self.camera_worker = CameraWorker(1)
         self.camera_worker.set_grayscale_enabled(self.grayscale_enabled)
+        self.camera_worker.set_binary_enabled(self.binary_enabled)
         self.camera_worker.frame_ready.connect(self.update_camera_frame)
         self.camera_worker.start()
 
     def toggle_grayscale_mode(self, checked):
         self.grayscale_enabled = bool(checked)
+        if self.grayscale_enabled and self.binary_enabled:
+            self.binary_enabled = False
+            self.binary_btn.blockSignals(True)
+            self.binary_btn.setChecked(False)
+            self.binary_btn.blockSignals(False)
+            self.binary_btn.setText("二值图像：关")
         self.grayscale_btn.setText("灰度图像：开" if self.grayscale_enabled else "灰度图像：关")
         if self.camera_worker:
             self.camera_worker.set_grayscale_enabled(self.grayscale_enabled)
+            self.camera_worker.set_binary_enabled(self.binary_enabled)
         message = (
             "灰度图像已开启，预览和识别输入将使用灰度图。"
             if self.grayscale_enabled
@@ -818,8 +919,31 @@ class OCRApp(QMainWindow):
         )
         self.statusBar().showMessage(message, 3000)
 
-    def update_camera_frame(self, pixmap):
+    def toggle_binary_mode(self, checked):
+        self.binary_enabled = bool(checked)
+        if self.binary_enabled and self.grayscale_enabled:
+            self.grayscale_enabled = False
+            self.grayscale_btn.blockSignals(True)
+            self.grayscale_btn.setChecked(False)
+            self.grayscale_btn.blockSignals(False)
+            self.grayscale_btn.setText("灰度图像：关")
+        self.binary_btn.setText("二值图像：开" if self.binary_enabled else "二值图像：关")
+        if self.camera_worker:
+            self.camera_worker.set_grayscale_enabled(self.grayscale_enabled)
+            self.camera_worker.set_binary_enabled(self.binary_enabled)
+        message = (
+            "二值图像已开启，预览和识别输入将使用二值图。"
+            if self.binary_enabled
+            else "二值图像已关闭，预览和识别输入恢复彩色图。"
+        )
+        self.statusBar().showMessage(message, 3000)
+
+    def update_camera_frame(self, pixmap, frame_bgr=None):
         """摄像头每帧回调，按预览框当前尺寸等比缩放后贴到 label。"""
+        if frame_bgr is not None:
+            self._maybe_start_chip_preview(frame_bgr)
+            pixmap = self._build_camera_preview_pixmap(frame_bgr)
+
         target_width = max(self.camera_frame.width(), 220)
         target_height = max(self.camera_frame.height(), 140)
         scaled_pixmap = pixmap.scaled(
@@ -828,6 +952,84 @@ class OCRApp(QMainWindow):
             Qt.TransformationMode.SmoothTransformation,
         )
         self.camera_frame.setPixmap(scaled_pixmap)
+
+    def _maybe_start_chip_preview(self, frame_bgr):
+        if frame_bgr is None:
+            return
+        if self.chip_preview_worker is not None and self.chip_preview_worker.isRunning():
+            return
+
+        now = time.monotonic()
+        if now - self.chip_preview_last_started < self.chip_preview_interval_seconds:
+            return
+
+        self.chip_preview_last_started = now
+        worker = ChipPreviewWorker(self.services.engine, frame_bgr.copy(), self)
+        worker.result_ready.connect(self._on_chip_preview_result)
+        worker.finished.connect(self._clear_chip_preview_worker)
+        self.chip_preview_worker = worker
+        worker.start()
+
+    def _on_chip_preview_result(self, result):
+        self.chip_preview_result = result
+
+    def _clear_chip_preview_worker(self):
+        self.chip_preview_worker = None
+
+    def _build_camera_preview_pixmap(self, frame_bgr):
+        display_frame = frame_bgr.copy()
+        result = self.chip_preview_result or {}
+        frame_h, frame_w = display_frame.shape[:2]
+        if result.get("image_shape") == [int(frame_h), int(frame_w)]:
+            self._draw_chip_preview_boxes(display_frame, result.get("chips", []))
+        return self._bgr_to_pixmap(display_frame)
+
+    @staticmethod
+    def _draw_chip_preview_boxes(display_frame, chips):
+        if not chips:
+            return
+
+        frame_h, frame_w = display_frame.shape[:2]
+        cv2.drawMarker(
+            display_frame,
+            (frame_w // 2, frame_h // 2),
+            (255, 255, 255),
+            markerType=cv2.MARKER_CROSS,
+            markerSize=18,
+            thickness=1,
+            line_type=cv2.LINE_AA,
+        )
+
+        for chip in chips:
+            bbox = chip.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            x1 = max(0, min(frame_w - 1, x1))
+            x2 = max(0, min(frame_w - 1, x2))
+            y1 = max(0, min(frame_h - 1, y1))
+            y2 = max(0, min(frame_h - 1, y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            selected = bool(chip.get("selected", False))
+            color = (0, 255, 0) if selected else (0, 210, 255)
+            thickness = 3 if selected else 2
+            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, thickness)
+
+            center = chip.get("center")
+            if center and len(center) == 2:
+                center_x = max(0, min(frame_w - 1, int(round(center[0]))))
+                center_y = max(0, min(frame_h - 1, int(round(center[1]))))
+                cv2.circle(display_frame, (center_x, center_y), 3, color, -1)
+
+    @staticmethod
+    def _bgr_to_pixmap(frame_bgr):
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+        return QPixmap.fromImage(image)
 
     def upload_reference_image(self):
         """上传参考图片入口。
@@ -884,16 +1086,16 @@ class OCRApp(QMainWindow):
                     pass
 
     def _recognize_reference_image(self, file_path):
-        if not self.grayscale_enabled:
+        if not self.grayscale_enabled and not self.binary_enabled:
             return self.services.template_manager.recognize_template_image(file_path)
 
         image = cv2.imread(str(file_path))
         if image is None:
             return self.services.template_manager.recognize_template_image(file_path)
 
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        result = self.services.engine.predict_image_from_array(gray_bgr)
+        result = self.services.engine.predict_image_from_array(
+            self._apply_image_mode_to_array(image)
+        )
         self.services.template_manager.last_error = result.get("status", "")
 
         if str(result.get("status", "")).startswith("error"):
@@ -921,6 +1123,18 @@ class OCRApp(QMainWindow):
             "detected_texts": detected_texts,
             "error": self.services.template_manager.last_error,
         }
+
+    def _apply_image_mode_to_array(self, image):
+        if self.binary_enabled:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(
+                gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        if self.grayscale_enabled:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return image
 
     def _process_reference_image(self, file_path):
         """处理参考图片。
@@ -1209,6 +1423,7 @@ class OCRApp(QMainWindow):
             self.services.data_logger,
             total_slots=len(self.slots),
             grayscale_enabled=self.grayscale_enabled,
+            binary_enabled=self.binary_enabled,
         )
         self.worker.progress_update.connect(self.update_slot_ui)
         self.worker.finished.connect(self.on_task_finished)
@@ -1446,6 +1661,8 @@ class OCRApp(QMainWindow):
         if self.live_worker is not None and self.live_worker.isRunning():
             self.live_worker.stop()
             self.live_worker.wait()
+        if self.chip_preview_worker is not None and self.chip_preview_worker.isRunning():
+            self.chip_preview_worker.wait()
         if self.camera_worker:
             self.camera_worker.stop()
             self.camera_worker.wait()

@@ -14,6 +14,7 @@
 """
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,8 @@ class OCREngine:
     _shared_detector = None
     _shared_classifier = None
     _shared_recognizer = None
+    _shared_chip_detector = None
+    _shared_chip_detector_error = None
 
     def __init__(self):
         """构造引擎并立即预热（加载模型）。
@@ -110,16 +113,24 @@ class OCREngine:
         self.ocr_onnx_py_dir = get_helper_root()
 
         # 检测/识别相关阈值，见类 docstring
-        self.det_resize_long = 512
+        self.det_resize_long = 960
         self.det_max_candidates = 100
         self.max_ocr_boxes = 4
         self.max_return_texts = 2
+        self.min_rec_score = 0.90
+        self.allowed_chip_chars = set(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz"
+            "0123456789"
+            "-./_+:#()[]"
+        )
 
         self.cv2 = None
         self.np = None
         self.detector = None
         self.classifier = None
         self.recognizer = None
+        self.chip_detector = None
         self.backend_init_error = None
 
         # 预热模型：让第一次 predict 不承担冷启动开销
@@ -138,6 +149,7 @@ class OCREngine:
         self.detector = cls._shared_detector
         self.classifier = cls._shared_classifier
         self.recognizer = cls._shared_recognizer
+        self.chip_detector = cls._shared_chip_detector
 
     def _ensure_backend(self):
         """确保 ONNX 三件套已加载。
@@ -197,6 +209,208 @@ class OCREngine:
         cls._shared_recognizer = recognizer
         self._bind_shared_backend()
 
+    def _ensure_chip_detector(self):
+        """按需加载芯片检测模型；加载失败不影响原 OCR 流程。"""
+        cls = type(self)
+        if cls._shared_chip_detector is not None:
+            self.chip_detector = cls._shared_chip_detector
+            return self.chip_detector
+
+        chip_model_paths = [
+            self.model_dir / "chip" / "chip_best_opset21.onnx",
+            self.model_dir / "chip" / "chip_best.onnx",
+        ]
+        chip_model_path = next((path for path in chip_model_paths if path.exists()), None)
+        if chip_model_path is None:
+            cls._shared_chip_detector_error = FileNotFoundError(
+                ", ".join(str(path) for path in chip_model_paths)
+            )
+            logger.info(
+                "芯片检测模型不存在，跳过 OCR 文本检测: %s",
+                [str(path) for path in chip_model_paths],
+            )
+            return None
+
+        helper_path = str(self.ocr_onnx_py_dir)
+        if self.ocr_onnx_py_dir.exists() and helper_path not in sys.path:
+            sys.path.insert(0, helper_path)
+
+        try:
+            from chip_det import ChipDetector
+
+            detector = ChipDetector(str(chip_model_path))
+        except Exception as e:
+            cls._shared_chip_detector_error = e
+            logger.warning(
+                "芯片检测模型加载失败，跳过 OCR 文本检测: model=%s error=%s",
+                chip_model_path,
+                e,
+            )
+            return None
+
+        cls._shared_chip_detector = detector
+        cls._shared_chip_detector_error = None
+        self.chip_detector = detector
+        logger.info("芯片检测模型加载成功: %s", chip_model_path)
+        return detector
+
+    @staticmethod
+    def _offset_box(box, offset_x, offset_y):
+        if box is None or (offset_x == 0 and offset_y == 0):
+            return box
+        adjusted = box.copy()
+        adjusted[:, 0] += offset_x
+        adjusted[:, 1] += offset_y
+        return adjusted
+
+    def _detect_center_chip_candidates(self, image, log_details=True):
+        """检测芯片框，并标记离图像中心最近的候选。"""
+        detector = self._ensure_chip_detector()
+        if detector is None:
+            error = type(self)._shared_chip_detector_error
+            if log_details and error is not None:
+                logger.info("芯片检测不可用，跳过 OCR 文本检测: %s", error)
+            return None
+
+        try:
+            chips = detector.detect(image)
+        except Exception as e:
+            logger.warning("芯片检测失败，跳过 OCR 文本检测: %s", e)
+            return None
+
+        h, w = image.shape[:2]
+        if log_details:
+            logger.info("芯片检测候选数量=%d", len(chips))
+        if not chips:
+            return {
+                "chips": [],
+                "selected": None,
+                "image_shape": [int(h), int(w)],
+            }
+
+        image_center_x = w / 2.0
+        image_center_y = h / 2.0
+        ranked = []
+        for index, item in enumerate(chips, start=1):
+            x1, y1, x2, y2 = item["bbox"]
+            center_x = (x1 + x2) / 2.0
+            center_y = (y1 + y2) / 2.0
+            distance = ((center_x - image_center_x) ** 2 + (center_y - image_center_y) ** 2) ** 0.5
+            candidate = dict(item)
+            candidate["center"] = [float(center_x), float(center_y)]
+            candidate["center_distance"] = float(distance)
+            candidate["selected"] = False
+            ranked.append((distance, candidate))
+            if log_details:
+                logger.info(
+                    "芯片检测框 %d/%d score=%.4f bbox=%s center=(%.1f, %.1f) center_distance=%.2f",
+                    index,
+                    len(chips),
+                    item.get("score", 0.0),
+                    [int(v) for v in item["bbox"]],
+                    center_x,
+                    center_y,
+                    distance,
+                )
+
+        _, selected = min(ranked, key=lambda pair: pair[0])
+        selected["selected"] = True
+        candidates = [item for _, item in ranked]
+        return {
+            "chips": candidates,
+            "selected": selected,
+            "image_shape": [int(h), int(w)],
+        }
+
+    def detect_chip_preview(self, image):
+        """给摄像头预览使用的芯片检测结果，不参与 OCR 文本判定。"""
+        try:
+            if image is None:
+                return {"chips": [], "selected": None, "status": "error: image is None"}
+            result = self._detect_center_chip_candidates(image, log_details=False)
+            if result is None:
+                h, w = image.shape[:2]
+                return {
+                    "chips": [],
+                    "selected": None,
+                    "image_shape": [int(h), int(w)],
+                    "status": "disabled",
+                }
+
+            preview_chips = []
+            selected_index = -1
+            for index, item in enumerate(result["chips"]):
+                bbox = [int(v) for v in item["bbox"]]
+                chip = {
+                    "bbox": bbox,
+                    "score": float(item.get("score", 0.0)),
+                    "center": [float(v) for v in item.get("center", [0.0, 0.0])],
+                    "center_distance": float(item.get("center_distance", 0.0)),
+                    "selected": bool(item.get("selected", False)),
+                }
+                if chip["selected"]:
+                    selected_index = index
+                preview_chips.append(chip)
+
+            return {
+                "chips": preview_chips,
+                "selected_index": selected_index,
+                "image_shape": result["image_shape"],
+                "status": "success" if preview_chips else "empty",
+            }
+        except Exception as e:
+            logger.warning("摄像头预览芯片检测失败: %s", e)
+            h, w = image.shape[:2] if image is not None else (0, 0)
+            return {
+                "chips": [],
+                "selected_index": -1,
+                "image_shape": [int(h), int(w)],
+                "status": f"error: {e}",
+            }
+
+    def _select_center_chip_roi(self, image):
+        """选择离图像中心最近的芯片 ROI，失败时返回 None 并跳过 OCR 文本检测。"""
+        detection = self._detect_center_chip_candidates(image, log_details=True)
+        if detection is None:
+            return None
+        selected = detection["selected"]
+        if selected is None:
+            return None
+
+        x1, y1, x2, y2 = selected["bbox"]
+        crop = image[y1 : y2 + 1, x1 : x2 + 1].copy()
+        if crop.size == 0:
+            logger.warning("芯片检测 ROI 为空，跳过 OCR 文本检测: bbox=%s", selected["bbox"])
+            return None
+
+        logger.info(
+            "已选择中心最近芯片 ROI bbox=%s crop_shape=%s",
+            [int(v) for v in selected["bbox"]],
+            crop.shape,
+        )
+        self._save_chip_roi_preview(crop, selected["bbox"])
+        return {
+            "crop": crop,
+            "bbox": selected["bbox"],
+            "box": selected["box"],
+        }
+
+    def _save_chip_roi_preview(self, crop, bbox):
+        """保存最近一次中心芯片 ROI，便于现场确认 OCR 实际输入。"""
+        try:
+            preview_dir = self.resource_root / "results" / "chip_roi_preview"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            bbox_text = "_".join(str(int(v)) for v in bbox)
+            output_path = preview_dir / f"chip_roi_{timestamp}_{bbox_text}.png"
+            ok = self.cv2.imwrite(str(output_path), crop)
+            if ok:
+                logger.info("芯片 ROI 裁剪图已保存: %s", output_path)
+            else:
+                logger.warning("芯片 ROI 裁剪图保存失败: %s", output_path)
+        except Exception as e:
+            logger.warning("芯片 ROI 裁剪图保存异常: %s", e)
+
     @staticmethod
     def _parse_angle(label):
         """把分类器输出的 label（可能是 "0"/"90"/"180deg" 等）解析成整数角度。"""
@@ -213,6 +427,37 @@ class OCREngine:
         if angle == 270:
             return self.cv2.rotate(image, self.cv2.ROTATE_90_CLOCKWISE)
         return image
+
+    def _map_rotated_roi_box_to_original(self, box, angle, roi_bbox, roi_shape):
+        """把旋转后 ROI 内的文本框坐标映射回原始图坐标。"""
+        if box is None:
+            return None
+
+        x1, y1, _, _ = roi_bbox
+        roi_h, roi_w = roi_shape[:2]
+        mapped = box.astype(float).copy()
+        if angle == 90:
+            x_u = box[:, 0].astype(float).copy()
+            y_u = box[:, 1].astype(float).copy()
+            mapped[:, 0] = roi_w - 1 - y_u
+            mapped[:, 1] = x_u
+        elif angle == 180:
+            mapped[:, 0] = roi_w - 1 - box[:, 0]
+            mapped[:, 1] = roi_h - 1 - box[:, 1]
+        elif angle == 270:
+            x_u = box[:, 0].astype(float).copy()
+            y_u = box[:, 1].astype(float).copy()
+            mapped[:, 0] = y_u
+            mapped[:, 1] = roi_h - 1 - x_u
+
+        mapped[:, 0] = mapped[:, 0].clip(0, roi_w - 1) + x1
+        mapped[:, 1] = mapped[:, 1].clip(0, roi_h - 1) + y1
+        return mapped.astype(self.np.float32)
+
+    def _is_chip_text(self, text):
+        if not text:
+            return False
+        return all(ch in self.allowed_chip_chars for ch in text)
 
     def _decode_rec_logits_with_score(self, logits):
         """CTC 解码识别头的输出，同时返回平均置信度。
@@ -235,10 +480,20 @@ class OCREngine:
         else:
             time_steps = logits.transpose(1, 0)
 
-        # 数值稳定的 softmax
-        time_steps = time_steps - self.np.max(time_steps, axis=1, keepdims=True)
-        time_probs = self.np.exp(time_steps)
-        time_probs = time_probs / self.np.sum(time_probs, axis=1, keepdims=True)
+        # 识别模型有的直接输出概率，有的输出 logits。
+        # 若概率分布再次 softmax，几千个字符类别会被摊平，score 会异常接近 0。
+        row_sums = self.np.sum(time_steps, axis=1)
+        looks_like_probs = (
+            self.np.nanmin(time_steps) >= 0.0
+            and self.np.nanmax(time_steps) <= 1.0
+            and self.np.nanmean(self.np.abs(row_sums - 1.0)) < 1e-2
+        )
+        if looks_like_probs:
+            time_probs = time_steps
+        else:
+            time_steps = time_steps - self.np.max(time_steps, axis=1, keepdims=True)
+            time_probs = self.np.exp(time_steps)
+            time_probs = time_probs / self.np.sum(time_probs, axis=1, keepdims=True)
 
         indices = self.np.argmax(time_probs, axis=1).tolist()
         scores = self.np.max(time_probs, axis=1).tolist()
@@ -320,7 +575,7 @@ class OCREngine:
 
         return [self._decode_rec_logits_with_score(output[index]) for index in range(output.shape[0])]
 
-    def predict_image_from_array(self, image):
+    def predict_image_from_array(self, image, target_angle=None):
         """对已经加载到内存的 BGR numpy 图像跑 OCR。
 
         Returns
@@ -333,36 +588,66 @@ class OCREngine:
             self._ensure_backend()
             if image is None:
                 return {"angle": -1, "texts": [], "status": "error: image is None"}
-            return self._predict_core(image)
+            return self._predict_core(image, target_angle=target_angle)
         except ModuleNotFoundError as e:
             return {"angle": -1, "texts": [], "status": f"error: missing package {e.name}"}
         except Exception as e:
             return {"angle": -1, "texts": [], "status": f"error: {e}"}
 
-    def _predict_core(self, image):
-        """核心 OCR 流水线。
+    @staticmethod
+    def _candidate_angles_for_target(target_angle):
+        """按用户模板角度生成检测候选方向；未传目标角度时保留四方向。"""
+        if target_angle is None:
+            return [0, 90, 180, 270]
 
-        步骤：
-        1. 分类器判定原图角度，把图转到正向。
-        2. 检测器找文本框并裁剪，按面积降序取前 ``max_ocr_boxes`` 个。
-        3. 识别器按 batch 跑，过滤 ``score > 0.5 & len > 2`` 的结果。
-        4. 若严过滤后没有结果，再从 fallback 里兜底拿至少一条，避免误报空。
-        """
-        # 1) 分类 + 转正
-        cls_result = self.classifier.predict(image)
-        angle = self._parse_angle(cls_result.get("label", 0))
-        upright_image = self._rotate_to_upright(image, angle)
-        h, w = upright_image.shape[:2]
+        try:
+            normalized = int(target_angle) % 360
+        except (TypeError, ValueError):
+            return [0, 90, 180, 270]
 
-        # 2) 检测：没框就整图作为候选；有框按面积降序截断
-        raw_results = self.detector.detect_and_crop(upright_image)
-        logger.info("OCR 检测候选框数量=%d", len(raw_results))
+        if normalized not in (0, 90, 180, 270):
+            return [0, 90, 180, 270]
+
+        opposite = (normalized + 180) % 360
+        return [normalized, opposite]
+
+    def _recognize_rotated_chip_roi(self, roi_image, roi_bbox, angle, image_shape):
+        """对单个旋转方向的中心芯片 ROI 跑 OCR，并返回可排序的结果。"""
+        ocr_image = self._rotate_to_upright(roi_image, angle)
+        logger.info("方向候选 %d° OCR 输入 ROI shape=%s", angle, ocr_image.shape)
+
+        raw_results = self.detector.detect_and_crop(ocr_image)
+        logger.info("方向候选 %d° OCR 检测候选框数量=%d", angle, len(raw_results))
+        for box_index, item in enumerate(raw_results, start=1):
+            crop = item.get("crop")
+            box = item.get("box")
+            original_box = self._map_rotated_roi_box_to_original(
+                box, angle, roi_bbox, roi_image.shape
+            )
+            item["box"] = original_box
+            box_points = original_box.astype(float).round(1).tolist() if original_box is not None else None
+            logger.info(
+                "方向候选 %d° OCR 原始检测框 %d/%d crop_shape=%s box=%s",
+                angle,
+                box_index,
+                len(raw_results),
+                getattr(crop, "shape", None),
+                box_points,
+            )
+
         if not raw_results:
-            logger.info("OCR 检测未返回文本框，使用整图作为识别候选")
+            logger.info("方向候选 %d° OCR 检测未返回文本框，使用该方向 ROI 作为识别候选", angle)
+            roi_h, roi_w = roi_image.shape[:2]
+            x1, y1, _, _ = roi_bbox
             raw_results = [{
-                "crop": upright_image,
+                "crop": ocr_image,
                 "box": self.np.array(
-                    [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
+                    [
+                        [x1, y1],
+                        [x1 + roi_w - 1, y1],
+                        [x1 + roi_w - 1, y1 + roi_h - 1],
+                        [x1, y1 + roi_h - 1],
+                    ],
                     dtype=self.np.float32,
                 ),
             }]
@@ -373,10 +658,25 @@ class OCREngine:
                 reverse=True,
             )[: self.max_ocr_boxes]
 
-        # 3) 识别 + 严过滤 + 兜底
-        valid_texts = []       # 达到严阈值的文本
-        fallback_texts = []    # 原始去重文本，供兜底使用
-        visual_items = []      # 调光预览用：识别文本 + 置信度 + 检测框
+        valid_texts = []
+        fallback_texts = []
+        visual_items = []
+        raw_scores = []
+        valid_scores = []
+
+        for box_index, item in enumerate(raw_results, start=1):
+            crop = item.get("crop")
+            box = item.get("box")
+            box_points = box.astype(float).round(1).tolist() if box is not None else None
+            logger.info(
+                "方向候选 %d° OCR 检测框 %d/%d crop_shape=%s box=%s",
+                angle,
+                box_index,
+                len(raw_results),
+                getattr(crop, "shape", None),
+                box_points,
+            )
+
         crops = [item["crop"] for item in raw_results]
         batch_capacity = self._get_rec_batch_capacity(len(crops))
         for start in range(0, len(crops), batch_capacity):
@@ -384,73 +684,155 @@ class OCREngine:
             try:
                 rec_results = self._predict_batch_texts_with_scores(crop_chunk)
             except Exception:
-                # 批量失败 -> 逐张退化（比如某些模型不支持动态 batch）
                 rec_results = [self._predict_text_with_score(crop) for crop in crop_chunk]
 
             for offset, (text, score) in enumerate(rec_results):
+                item_index = start + offset
+                raw_item = raw_results[item_index]
+                box = raw_item.get("box")
                 clean_text = text.strip()
+                box_points = box.astype(float).round(1).tolist() if box is not None else None
+                logger.info(
+                    "方向候选 %d° OCR 检测框 %d/%d 识别原始 text=%r score=%.4f len=%d crop_shape=%s box=%s",
+                    angle,
+                    item_index + 1,
+                    len(raw_results),
+                    clean_text,
+                    score,
+                    len(clean_text),
+                    getattr(raw_item.get("crop"), "shape", None),
+                    box_points,
+                )
                 if not clean_text:
                     continue
 
-                raw_item = raw_results[start + offset]
-                box = raw_item.get("box")
+                if not self._is_chip_text(clean_text):
+                    logger.info("方向候选 %d° OCR 候选非芯片字符，已过滤 text=%r", angle, clean_text)
+                    continue
+
+                raw_scores.append(float(score))
+                if clean_text not in fallback_texts:
+                    fallback_texts.append(clean_text)
+
+                if score < self.min_rec_score:
+                    logger.info(
+                        "方向候选 %d° OCR 候选置信度低于 %.2f，已过滤 text=%r score=%.4f",
+                        angle,
+                        self.min_rec_score,
+                        clean_text,
+                        score,
+                    )
+                    continue
+
                 visual_items.append({
                     "text": clean_text,
                     "score": float(score),
                     "box": box.astype(float).tolist() if box is not None else None,
                 })
-
-                if clean_text not in fallback_texts:
-                    fallback_texts.append(clean_text)
+                valid_scores.append(float(score))
 
                 logger.info(
-                    "OCR 识别候选 text=%r score=%.4f len=%d",
+                    "方向候选 %d° OCR 识别候选 text=%r score=%.4f len=%d",
+                    angle,
                     clean_text,
                     score,
                     len(clean_text),
                 )
 
-                if score > 0.5 and len(clean_text) > 2 and clean_text not in valid_texts:
+                if len(clean_text) > 2 and clean_text not in valid_texts:
                     valid_texts.append(clean_text)
-                    if len(valid_texts) >= self.max_return_texts:
-                        break
 
-            if len(valid_texts) >= self.max_return_texts:
-                break
-
-        logger.info("OCR 过滤后文本=%s，兜底文本=%s", valid_texts, fallback_texts)
-
-        # 4) 兜底：严过滤 0 条时，从 fallback 里挑长度 >=2 的先拿
-        if not valid_texts:
-            for text in fallback_texts:
-                if len(text) >= 2:
-                    valid_texts.append(text)
-                if len(valid_texts) >= self.max_return_texts:
-                    break
-            # 还是没有？直接取 fallback 第一条，至少让 UI 显示点东西
-            if not valid_texts and fallback_texts:
-                valid_texts = fallback_texts[:1]
-
-        if not valid_texts:
-            return {
-                "angle": int(angle),
-                "texts": [],
-                "items": visual_items,
-                "box_coordinate": "upright",
-                "image_shape": [int(h), int(w)],
-                "status": "empty",
-            }
+        valid_texts = valid_texts[: self.max_return_texts]
+        best_raw_score = max(raw_scores) if raw_scores else 0.0
+        avg_valid_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        score_tuple = (
+            1 if valid_texts else 0,
+            avg_valid_score,
+            len(valid_texts),
+            best_raw_score,
+            len(fallback_texts),
+        )
+        logger.info(
+            "方向候选 %d° OCR 汇总 texts=%s fallback=%s avg_valid=%.4f best_raw=%.4f score_key=%s",
+            angle,
+            valid_texts,
+            fallback_texts,
+            avg_valid_score,
+            best_raw_score,
+            score_tuple,
+        )
 
         return {
             "angle": int(angle),
             "texts": valid_texts,
+            "all_texts": fallback_texts,
             "items": visual_items,
-            "box_coordinate": "upright",
-            "image_shape": [int(h), int(w)],
-            "status": "success",
+            "box_coordinate": "original",
+            "image_shape": [int(image_shape[0]), int(image_shape[1])],
+            "status": "success" if valid_texts else "empty",
+            "score_key": score_tuple,
+            "orientation_scores": {
+                "valid_text_count": len(valid_texts),
+                "avg_valid_score": avg_valid_score,
+                "best_raw_score": best_raw_score,
+                "raw_text_count": len(fallback_texts),
+            },
+            "selected_chip_bbox": [int(v) for v in roi_bbox],
         }
 
-    def predict_image(self, img_path):
+    def _predict_core(self, image, target_angle=None):
+        """核心 OCR 流水线：只裁剪中心芯片 ROI，并从四个方向中选择置信度最高者。"""
+        h, w = image.shape[:2]
+        chip_roi = self._select_center_chip_roi(image)
+        if chip_roi is None:
+            logger.info("未选中芯片 ROI，跳过 OCR 文本检测，避免整图 OCR shape=%s", image.shape)
+            return {
+                "angle": 0,
+                "texts": [],
+                "all_texts": [],
+                "items": [],
+                "box_coordinate": "original",
+                "image_shape": [int(h), int(w)],
+                "status": "empty",
+            }
+
+        roi_bbox = chip_roi["bbox"]
+        roi_image = chip_roi["crop"]
+        candidate_angles = self._candidate_angles_for_target(target_angle)
+        logger.info(
+            "OCR 输入已裁剪为中心芯片 ROI bbox=%s shape=%s，将测试方向=%s",
+            [int(v) for v in roi_bbox],
+            roi_image.shape,
+            candidate_angles,
+        )
+
+        candidates = [
+            self._recognize_rotated_chip_roi(roi_image, roi_bbox, angle, (h, w))
+            for angle in candidate_angles
+        ]
+        selected = max(candidates, key=lambda item: item["score_key"])
+        selected["orientation_candidates"] = [
+            {
+                "angle": item["angle"],
+                "status": item["status"],
+                "texts": item["texts"],
+                "all_texts": item["all_texts"],
+                "score_key": list(item["score_key"]),
+                "orientation_scores": item["orientation_scores"],
+            }
+            for item in candidates
+        ]
+        logger.info(
+            "已选择方向候选 %d° 作为最终判断依据 texts=%s all_texts=%s score_key=%s",
+            selected["angle"],
+            selected["texts"],
+            selected["all_texts"],
+            selected["score_key"],
+        )
+        selected.pop("score_key", None)
+        return selected
+
+    def predict_image(self, img_path, target_angle=None):
         """对图片文件路径跑 OCR。
 
         内部先用 OpenCV 读图再走 `_predict_core`。批量场景建议外层预加载后
@@ -463,7 +845,7 @@ class OCREngine:
             if image is None:
                 return {"angle": -1, "texts": [], "status": f"error: cannot read image: {img_path}"}
 
-            return self._predict_core(image)
+            return self._predict_core(image, target_angle=target_angle)
         except ModuleNotFoundError as e:
             return {"angle": -1, "texts": [], "status": f"error: missing package {e.name}"}
         except Exception as e:
