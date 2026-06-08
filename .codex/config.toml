@@ -1,0 +1,4 @@
+# Project-level Codex config.
+# Equivalent to launching Codex with yolo-style full access.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"

@@ -41,6 +41,7 @@ class ControlWorker(QThread):
         data_logger,
         total_slots=21,
         grayscale_enabled=False,
+        binary_enabled=False,
         parent=None,
     ):
         """
@@ -68,11 +69,43 @@ class ControlWorker(QThread):
         self.data_logger = data_logger
         self.total_slots = total_slots
         self.grayscale_enabled = bool(grayscale_enabled)
+        self.binary_enabled = bool(binary_enabled)
 
     @staticmethod
     def _to_gray_bgr(image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    @staticmethod
+    def _to_binary_bgr(image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+    def _apply_image_mode(self, image):
+        if self.binary_enabled:
+            return self._to_binary_bgr(image)
+        if self.grayscale_enabled:
+            return self._to_gray_bgr(image)
+        return image
+
+    @staticmethod
+    def _format_texts_with_scores(result):
+        parts = []
+        for item in result.get("items", []) or []:
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            try:
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                score = 0.0
+            parts.append(f"{text}({score:.2%})")
+        if parts:
+            return "|".join(parts)
+
+        texts = result.get("all_texts") or result.get("texts", [])
+        return "|".join(str(text) for text in texts)
 
     def _preload_images(self, files):
         """把所有图片一次性读到内存。
@@ -112,10 +145,11 @@ class ControlWorker(QThread):
             引擎返回或 `missing` fallback 产生的原始结果字典。
         """
         texts = result.get("texts", [])
+        all_text_with_scores = self._format_texts_with_scores(result)
         angle = result.get("angle", 0)
         raw_status = str(result.get("status", ""))
 
-        # 引擎自身报错 -> 直接识别失败；否则交给 MaterialController 判定四态
+        # 引擎自身报错 -> 直接识别失败；否则交给 MaterialController 判定三态
         if raw_status.startswith("error"):
             status, color = "识别失败", "red"
         else:
@@ -130,7 +164,7 @@ class ControlWorker(QThread):
             raw_status,
         )
         # 日志用 1 基准编号；"|" 是多文本的轻量分隔符（CSV 字段内不会与逗号冲突）
-        self.data_logger.log_result(slot_index + 1, "|".join(texts), angle, status)
+        self.data_logger.log_result(slot_index + 1, all_text_with_scores, angle, status)
         self.progress_update.emit(slot_index, status, color)
 
     def run(self):
@@ -158,9 +192,11 @@ class ControlWorker(QThread):
             if index < len(files) and files[index] in preloaded:
                 infer_start = time.time()
                 image = preloaded[files[index]]
-                if self.grayscale_enabled:
-                    image = self._to_gray_bgr(image)
-                result = self.engine.predict_image_from_array(image)
+                image = self._apply_image_mode(image)
+                result = self.engine.predict_image_from_array(
+                    image,
+                    target_angle=self.target_a,
+                )
                 logger.info("槽位 %02d 推理完成, 耗时 %.3fs",
                             index + 1, time.time() - infer_start)
             else:

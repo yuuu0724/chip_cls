@@ -96,7 +96,9 @@ class TemplateManager:
                 }
 
             detected_angle = int(result.get("angle", 0) or 0)
-            detected_texts = [str(text) for text in result.get("texts", [])]
+            detected_texts = [
+                str(text) for text in (result.get("all_texts") or result.get("texts", []))
+            ]
             detected_model = ""
             if detected_texts:
                 detected_model = self._normalize_model_text(detected_texts[0])
