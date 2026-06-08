@@ -17,7 +17,7 @@ import os
 import tempfile
 
 from motion import x_mm_to_pulses, y_mm_to_pulses
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -63,8 +63,6 @@ class TemplateConfirmDialog(QDialog):
         detected_angle,
         detected_texts=None,
         existing_models=None,
-        current_light_config=None,
-        light_adjuster=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -76,8 +74,6 @@ class TemplateConfirmDialog(QDialog):
             QLabel { color: #ffffff; }
             """
         )
-        self._light_config = dict(current_light_config or {})
-        self._light_adjuster = light_adjuster
         self.detected_texts = list(detected_texts or [])
 
         layout = QVBoxLayout(self)
@@ -189,20 +185,6 @@ class TemplateConfirmDialog(QDialog):
         self.angle_spinbox.setStyleSheet(self._spin_style())
         layout.addWidget(self.angle_spinbox)
 
-        light_row = QHBoxLayout()
-        light_row.setSpacing(8)
-        self.light_label = QLabel(self._format_light_config())
-        self.light_label.setStyleSheet("color: #a1a1a6; font-size: 13px;")
-        light_row.addWidget(self.light_label, 1)
-
-        light_btn = QPushButton("调光")
-        light_btn.setFixedHeight(36)
-        light_btn.setStyleSheet(self._secondary_button_style())
-        light_btn.clicked.connect(self._open_light_adjustment)
-        light_btn.setEnabled(self._light_adjuster is not None)
-        light_row.addWidget(light_btn)
-        layout.addLayout(light_row)
-
         layout.addStretch()
 
         button_layout = QHBoxLayout()
@@ -236,25 +218,6 @@ class TemplateConfirmDialog(QDialog):
     def get_angle(self):
         """用户最终确认 / 修改后的角度（0~359 整数）。"""
         return self.angle_spinbox.value()
-
-    def get_light_config(self):
-        """返回模板绑定的光源配置。"""
-        return dict(self._light_config)
-
-    def _open_light_adjustment(self):
-        if self._light_adjuster is None:
-            return
-        config = self._light_adjuster(self._light_config)
-        if config:
-            self._light_config = dict(config)
-            self.light_label.setText(self._format_light_config())
-
-    def _format_light_config(self):
-        return (
-            "光源配置："
-            f"1路 {float(self._light_config.get('light1Voltage', 0.0)):.2f} V，"
-            f"2路 {float(self._light_config.get('light2Voltage', 0.0)):.2f} V"
-        )
 
     @staticmethod
     def _spin_style():
@@ -460,347 +423,6 @@ class CameraCaptureDialog(QDialog):
         super().done(result)
 
 
-class LightOcrWorker(QThread):
-    """调光面板专用 OCR 线程，避免识别阻塞 UI。"""
-
-    result_ready = Signal(object, object)
-
-    def __init__(self, engine, frame_bgr, parent=None):
-        super().__init__(parent)
-        self.engine = engine
-        self.frame_bgr = frame_bgr
-
-    def run(self):
-        try:
-            result = self.engine.predict_image_from_array(self.frame_bgr)
-        except Exception as exc:
-            result = {"angle": -1, "texts": [], "items": [], "status": f"error: {exc}"}
-        self.result_ready.emit(self.frame_bgr, result)
-
-
-class LightAdjustDialog(QDialog):
-    """两路光源调光对话框，复用主窗口摄像头预览。"""
-
-    def __init__(self, camera_worker, device_controller, engine=None, initial_config=None, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("光源调节")
-        self.setFixedSize(720, 640)
-        self.setStyleSheet(
-            """
-            QDialog { background-color: #1a1a1e; }
-            QLabel { color: #ffffff; }
-            """
-        )
-        self.camera_worker = camera_worker
-        self.device_controller = device_controller
-        self.engine = engine
-        self.light_config = dict(initial_config or {})
-        self._last_frame_bgr = None
-        self._last_ocr_result = None
-        self._ocr_worker = None
-
-        self._apply_timer = QTimer(self)
-        self._apply_timer.setSingleShot(True)
-        self._apply_timer.timeout.connect(self._apply_lights)
-        self._ocr_timer = QTimer(self)
-        self._ocr_timer.setInterval(1200)
-        self._ocr_timer.timeout.connect(self._start_ocr_preview)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
-
-        title = QLabel("光源调节")
-        title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700;")
-        layout.addWidget(title)
-
-        tip = QLabel("请调整光源，使芯片上的所有字符清晰可见且识别正确。")
-        tip.setStyleSheet("color: #FFD60A; font-size: 14px;")
-        tip.setWordWrap(True)
-        layout.addWidget(tip)
-
-        self.preview_label = QLabel("等待摄像头信号...")
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(680, 420)
-        self.preview_label.setScaledContents(False)
-        self.preview_label.setStyleSheet(
-            "background-color: #0a0e1a; border: 1px solid rgba(0,122,255,0.3); border-radius: 8px;"
-        )
-        layout.addWidget(self.preview_label, 1)
-
-        self.ocr_status_label = QLabel("识别结果：等待画面")
-        self.ocr_status_label.setStyleSheet("color: #34C759; font-size: 13px;")
-        self.ocr_status_label.setWordWrap(True)
-        layout.addWidget(self.ocr_status_label)
-
-        light1_row = QHBoxLayout()
-        light1_row.setSpacing(8)
-        light1_row.addWidget(self._label("1 路光源电压"))
-        self.light1_spin = self._voltage_spin(self.light_config.get("light1Voltage", 0.0))
-        light1_row.addWidget(self.light1_spin)
-        layout.addLayout(light1_row)
-
-        light2_row = QHBoxLayout()
-        light2_row.setSpacing(8)
-        light2_row.addWidget(self._label("2 路光源电压"))
-        self.light2_spin = self._voltage_spin(self.light_config.get("light2Voltage", 0.0))
-        light2_row.addWidget(self.light2_spin)
-        layout.addLayout(light2_row)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
-
-        apply_btn = QPushButton("应用当前电压")
-        apply_btn.setFixedHeight(42)
-        apply_btn.setStyleSheet(self._secondary_button_style())
-        apply_btn.clicked.connect(self._apply_lights)
-        btn_layout.addWidget(apply_btn)
-
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setFixedHeight(42)
-        cancel_btn.setStyleSheet(TemplateConfirmDialog._cancel_button_style())
-        cancel_btn.clicked.connect(self.reject)
-        btn_layout.addWidget(cancel_btn)
-
-        ok_btn = QPushButton("确认保存")
-        ok_btn.setFixedHeight(42)
-        ok_btn.setStyleSheet(TemplateConfirmDialog._ok_button_style())
-        ok_btn.clicked.connect(self._on_accept)
-        btn_layout.addWidget(ok_btn)
-
-        layout.addLayout(btn_layout)
-
-        if self.camera_worker:
-            self.camera_worker.frame_ready.connect(self._on_frame)
-        if self.engine is not None:
-            self._ocr_timer.start()
-
-    def _label(self, text):
-        label = QLabel(text)
-        label.setStyleSheet("color: #a1a1a6; font-size: 14px; min-width: 110px;")
-        return label
-
-    def _voltage_spin(self, value):
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 24.0)
-        spin.setDecimals(2)
-        spin.setSingleStep(0.1)
-        spin.setSuffix(" V")
-        spin.setValue(float(value or 0.0))
-        spin.setMinimumHeight(38)
-        spin.setStyleSheet(
-            """
-            QDoubleSpinBox {
-                color: #ffffff;
-                background-color: #2a2a2e;
-                border: 1px solid #444449;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            QDoubleSpinBox:focus { border: 2px solid #007AFF; }
-            """
-        )
-        spin.valueChanged.connect(lambda _value: self._apply_timer.start(250))
-        return spin
-
-    def _on_frame(self, pixmap, frame_bgr=None):
-        frame = frame_bgr
-        if frame is None:
-            frame = getattr(self.camera_worker, "current_frame_bgr", None)
-        if frame is None:
-            scaled = pixmap.scaled(
-                self.preview_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.preview_label.setPixmap(scaled)
-            return
-        self._last_frame_bgr = frame.copy()
-        self._render_preview(self._last_frame_bgr, self._last_ocr_result)
-
-    def _start_ocr_preview(self):
-        if self.engine is None or self._last_frame_bgr is None:
-            return
-        if self._ocr_worker is not None and self._ocr_worker.isRunning():
-            return
-        self._ocr_worker = LightOcrWorker(self.engine, self._last_frame_bgr.copy())
-        self._ocr_worker.result_ready.connect(self._on_ocr_result)
-        self._ocr_worker.finished.connect(self._ocr_worker.deleteLater)
-        self._ocr_worker.finished.connect(self._clear_ocr_worker)
-        self._ocr_worker.start()
-
-    def _on_ocr_result(self, frame_bgr, result):
-        self._last_ocr_result = result
-        texts = result.get("texts", [])
-        status = result.get("status", "")
-        if texts:
-            self.ocr_status_label.setText("识别结果：" + " | ".join(texts))
-        else:
-            self.ocr_status_label.setText(f"识别结果：{status or '未识别到文本'}")
-        self._render_preview(frame_bgr, result)
-
-    def _clear_ocr_worker(self):
-        self._ocr_worker = None
-
-    def _render_preview(self, frame_bgr, result=None):
-        display_frame = self._build_annotated_frame(frame_bgr, result)
-        pixmap = self._bgr_to_pixmap(display_frame)
-        scaled = pixmap.scaled(
-            self.preview_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.preview_label.setPixmap(scaled)
-
-    def _build_annotated_frame(self, frame_bgr, result):
-        try:
-            import cv2
-            import numpy as np
-        except Exception:
-            return frame_bgr
-
-        display_frame = frame_bgr.copy()
-
-        if not result:
-            return display_frame
-
-        angle = int(result.get("angle", 0) or 0)
-        box_coordinate = str(result.get("box_coordinate", "upright"))
-        frame_h, frame_w = frame_bgr.shape[:2]
-        for item in result.get("items", []):
-            box = item.get("box")
-            text = str(item.get("text", "")).strip()
-            score = item.get("score", 0.0)
-            if not box or not text:
-                continue
-
-            box_points = np.array(box, dtype=np.float32)
-            if box_coordinate == "original":
-                pts = box_points
-            else:
-                pts = self._map_ocr_box_to_preview(
-                    box_points,
-                    angle,
-                    frame_w,
-                    frame_h,
-                )
-            pts = pts.astype(np.int32).reshape(-1, 1, 2)
-            cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2)
-            x = max(int(pts[:, 0, 0].min()), 0)
-            y = max(int(pts[:, 0, 1].min()) - 8, 18)
-            label = f"{text} {float(score):.2f}"
-            (tw, th), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1
-            )
-            cv2.rectangle(
-                display_frame,
-                (x, y - th - baseline - 4),
-                (x + tw + 6, y + baseline),
-                (0, 0, 0),
-                -1,
-            )
-            cv2.putText(
-                display_frame,
-                label,
-                (x + 3, y - 3),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
-        return display_frame
-
-    @staticmethod
-    def _map_ocr_box_to_preview(box, angle, frame_w, frame_h):
-        """把 OCR 内部转正后的框坐标映射回未旋转的摄像头预览。"""
-        mapped = box.copy()
-        if angle == 90:
-            x_u = box[:, 0].copy()
-            y_u = box[:, 1].copy()
-            mapped[:, 0] = frame_w - 1 - y_u
-            mapped[:, 1] = x_u
-        if angle == 180:
-            mapped[:, 0] = frame_w - 1 - box[:, 0]
-            mapped[:, 1] = frame_h - 1 - box[:, 1]
-        if angle == 270:
-            x_u = box[:, 0].copy()
-            y_u = box[:, 1].copy()
-            mapped[:, 0] = y_u
-            mapped[:, 1] = frame_h - 1 - x_u
-        mapped[:, 0] = mapped[:, 0].clip(0, frame_w - 1)
-        mapped[:, 1] = mapped[:, 1].clip(0, frame_h - 1)
-        return mapped
-
-    @staticmethod
-    def _bgr_to_pixmap(frame_bgr):
-        try:
-            import cv2
-        except Exception:
-            return QPixmap()
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
-        return QPixmap.fromImage(image)
-
-    def _current_config(self):
-        return {
-            "light1Voltage": float(self.light1_spin.value()),
-            "light2Voltage": float(self.light2_spin.value()),
-        }
-
-    def _apply_lights(self):
-        config = self._current_config()
-        if self.device_controller is None:
-            self.light_config = config
-            return True
-
-        for channel, key in ((1, "light1Voltage"), (2, "light2Voltage")):
-            result = self.device_controller.set_light_voltage(channel, config[key])
-            if not result.success:
-                QMessageBox.warning(self, "调光失败", result.message)
-                return False
-        self.light_config = config
-        return True
-
-    def _on_accept(self):
-        if self._apply_lights():
-            self.accept()
-
-    def get_light_config(self):
-        return dict(self.light_config)
-
-    def done(self, result):
-        self._ocr_timer.stop()
-        if self.camera_worker:
-            try:
-                self.camera_worker.frame_ready.disconnect(self._on_frame)
-            except RuntimeError:
-                pass
-        if self._ocr_worker is not None and self._ocr_worker.isRunning():
-            try:
-                self._ocr_worker.result_ready.disconnect(self._on_ocr_result)
-            except RuntimeError:
-                pass
-        super().done(result)
-
-    @staticmethod
-    def _secondary_button_style():
-        return """
-            QPushButton {
-                background-color: #007AFF;
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                font-weight: 600;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: #0A84FF; }
-        """
-
-
 class VirtualKeyboardDialog(QDialog):
     """数字 + 英文字母虚拟键盘（便于触屏输入料盘编号）。
 
@@ -997,6 +619,8 @@ class VirtualKeyboardDialog(QDialog):
 class AddTrayDialog(QDialog):
     """新增料盘对话框，录入基础参数和首槽坐标。"""
 
+    DEFAULT_JOG_SPEED = 1000
+
     jog_requested = Signal(str, int, int)
     origin_saved = Signal(dict)
 
@@ -1015,7 +639,6 @@ class AddTrayDialog(QDialog):
         self,
         existing_ids,
         coordinate_provider=None,
-        light_adjuster=None,
         parent=None,
         initial_data=None,
         edit_mode=False,
@@ -1026,8 +649,6 @@ class AddTrayDialog(QDialog):
         self.setStyleSheet("QDialog { background-color: #1a1a1e; } QLabel { color: #ffffff; }")
         self.existing_ids = existing_ids
         self.coordinate_provider = coordinate_provider
-        self.light_adjuster = light_adjuster
-        self.light_config = {}
         self.initial_data = initial_data or {}
         self.edit_mode = bool(edit_mode)
         self._numeric_spin_editors = {}
@@ -1193,18 +814,6 @@ class AddTrayDialog(QDialog):
         motion_label.setStyleSheet(self._LABEL_STYLE)
         layout.addWidget(motion_label)
 
-        speed_row = QHBoxLayout()
-        speed_row.setSpacing(8)
-        speed_row.addWidget(self._small_label("速度"))
-        self.motion_speed_spin = QSpinBox()
-        self.motion_speed_spin.setRange(1, 1000000)
-        self.motion_speed_spin.setValue(1000)
-        self.motion_speed_spin.setMinimumHeight(36)
-        self.motion_speed_spin.setStyleSheet(self._FIELD_STYLE)
-        self._enable_numeric_keyboard(self.motion_speed_spin, "输入运动速度")
-        speed_row.addWidget(self.motion_speed_spin, 1)
-        layout.addLayout(speed_row)
-
         self.axis_step_spins = {}
         for axis in ("X", "Y", "Z"):
             axis_row = QHBoxLayout()
@@ -1212,8 +821,8 @@ class AddTrayDialog(QDialog):
             axis_row.addWidget(self._small_label(f"{axis}步长"))
             step_spin = QSpinBox()
             step_spin.setRange(1, 1000000)
-            step_spin.setValue(1000)
-            step_spin.setSingleStep(1000)
+            step_spin.setValue(5000)
+            step_spin.setSingleStep(5000)
             step_spin.setSuffix(" 脉冲")
             step_spin.setMinimumHeight(36)
             step_spin.setStyleSheet(self._FIELD_STYLE)
@@ -1241,18 +850,7 @@ class AddTrayDialog(QDialog):
         get_coord_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
         get_coord_btn.clicked.connect(self._get_current_position)
         collect_row.addWidget(get_coord_btn)
-
-        light_btn = QPushButton("调光")
-        light_btn.setFixedHeight(38)
-        light_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
-        light_btn.clicked.connect(self._open_light_adjustment)
-        light_btn.setEnabled(self.light_adjuster is not None)
-        collect_row.addWidget(light_btn)
         layout.addLayout(collect_row)
-
-        self.light_summary = QLabel("光源配置：未设置")
-        self.light_summary.setStyleSheet("color: #a1a1a6; font-size: 13px;")
-        layout.addWidget(self.light_summary)
 
         layout.addStretch()
 
@@ -1400,7 +998,6 @@ class AddTrayDialog(QDialog):
             "origin_x": self.origin_x_spin.value(),
             "origin_y": self.origin_y_spin.value(),
             "origin_z": self.origin_z_spin.value(),
-            "light_config": dict(self.light_config),
         }
 
     def _small_label(self, text):
@@ -1450,8 +1047,7 @@ class AddTrayDialog(QDialog):
 
     def _request_jog(self, axis, direction):
         step = int(self.axis_step_spins[axis].value())
-        speed = int(self.motion_speed_spin.value())
-        self.jog_requested.emit(axis, step * int(direction), speed)
+        self.jog_requested.emit(axis, step * int(direction), self.DEFAULT_JOG_SPEED)
 
     def _update_pitch_unit(self):
         if self.pitch_unit_combo.currentData() == "pulses":
@@ -1497,25 +1093,6 @@ class AddTrayDialog(QDialog):
         self.origin_x_spin.setValue(float(origin.get("x") or 0))
         self.origin_y_spin.setValue(float(origin.get("y") or 0))
         self.origin_z_spin.setValue(float(origin.get("z") or 0))
-        self.light_config = dict(self.initial_data.get("lightConfig") or {})
-        if self.light_config:
-            self.light_summary.setText(
-                "光源配置："
-                f"1路 {float(self.light_config.get('light1Voltage', 0.0)):.2f} V，"
-                f"2路 {float(self.light_config.get('light2Voltage', 0.0)):.2f} V"
-            )
-
-    def _open_light_adjustment(self):
-        if self.light_adjuster is None:
-            return
-        config = self.light_adjuster(self.light_config)
-        if config:
-            self.light_config = dict(config)
-            self.light_summary.setText(
-                "光源配置："
-                f"1路 {float(self.light_config.get('light1Voltage', 0.0)):.2f} V，"
-                f"2路 {float(self.light_config.get('light2Voltage', 0.0)):.2f} V"
-            )
 
     @staticmethod
     def _double_spin_style():
@@ -1551,7 +1128,7 @@ class SlotMoveConfirmDialog(QDialog):
     next_slot : int
         下一个待识别的槽位（1 基准，用于提示工人）。
     current_status : str
-        当前槽位的中文识别结果（"正常" / "方向错误" 等）。
+        当前槽位的中文识别结果（"正常" / "异常" / "识别失败" 等）。
     current_color : str
         颜色键（"green" / "red"），决定结果文字颜色。
     total_slots : int
@@ -1646,3 +1223,4 @@ class SlotMoveConfirmDialog(QDialog):
         btn_layout.addWidget(confirm_btn)
 
         layout.addLayout(btn_layout)
+

@@ -51,7 +51,7 @@ class MaterialSlot(QFrame):
             """
         )
 
-        # 状态文字（"待机" / "正常" / "方向错误" 等）
+        # 状态文字（"待机" / "正常" / "异常" 等）
         self.status_label = QLabel(" ")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setWordWrap(True)
@@ -80,7 +80,7 @@ class MaterialSlot(QFrame):
         Parameters
         ----------
         status : str
-            中文状态（"正常" / "方向错误" / "型号错误" / "识别失败"）。
+            中文状态（"正常" / "异常" / "识别失败"）。
         color_key : str
             颜色键，目前支持 ``green`` / ``red`` / ``default`` 三种。
             未识别的颜色键会退回 ``default`` 的深灰。

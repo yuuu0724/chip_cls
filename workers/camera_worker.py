@@ -5,9 +5,13 @@
 往往会有 ~30ms 开销，主线程直接跑会导致界面卡顿）。
 """
 
+import logging
+
 import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
+
+logger = logging.getLogger(__name__)
 
 
 class CameraWorker(QThread):
@@ -26,7 +30,8 @@ class CameraWorker(QThread):
         每抓取一帧就发射一次，UI 层 connect 后更新 label。
     """
 
-    frame_ready = Signal(QPixmap)
+    frame_ready = Signal(QPixmap, object)
+    status_changed = Signal(str)
 
     def __init__(self, camera_id=0):
         """构造线程对象；此时还未真正打开摄像头。
@@ -45,20 +50,39 @@ class CameraWorker(QThread):
         # 最新原始 BGR 帧，用于灰度开关切换时恢复彩色输入
         self.current_raw_frame_bgr = None
         self.grayscale_enabled = False
+        self.binary_enabled = False
+        self.retry_interval_ms = 1000
+        self.max_read_failures_before_reopen = 30
 
     @staticmethod
     def _to_gray_bgr(frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
+    @staticmethod
+    def _to_binary_bgr(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+    def _apply_image_mode(self, frame):
+        if self.binary_enabled:
+            return self._to_binary_bgr(frame)
+        if self.grayscale_enabled:
+            return self._to_gray_bgr(frame)
+        return frame.copy()
+
     def set_grayscale_enabled(self, enabled):
         self.grayscale_enabled = bool(enabled)
         if self.current_raw_frame_bgr is None:
             return
-        if self.grayscale_enabled:
-            self.current_frame_bgr = self._to_gray_bgr(self.current_raw_frame_bgr)
-        else:
-            self.current_frame_bgr = self.current_raw_frame_bgr.copy()
+        self.current_frame_bgr = self._apply_image_mode(self.current_raw_frame_bgr)
+
+    def set_binary_enabled(self, enabled):
+        self.binary_enabled = bool(enabled)
+        if self.current_raw_frame_bgr is None:
+            return
+        self.current_frame_bgr = self._apply_image_mode(self.current_raw_frame_bgr)
 
     def _open_camera(self):
         """尝试多种后端打开摄像头，返回 None 表示全部失败。
@@ -83,35 +107,61 @@ class CameraWorker(QThread):
         """线程主循环：打开摄像头 -> 循环抓帧 -> 发信号。
 
         抓帧失败（`ret is False`）时不会 break，会继续循环 —— 这样一时的
-        USB 抖动不至于让预览彻底停掉。`is_running` 置 False 才会退出。
+        USB 抖动不至于让预览彻底停掉。若连续失败，会释放并重新打开摄像头。
+        `is_running` 置 False 才会退出。
         """
-        self.cap = self._open_camera()
-        if self.cap is None:
-            return
-
-        # 预览不需要高分辨率，320x240 足够看清，同时也节省 CPU
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-
+        consecutive_failures = 0
         while self.is_running:
+            if self.cap is None:
+                self.cap = self._open_camera()
+                if self.cap is None:
+                    logger.warning("摄像头 %s 打开失败，将继续重试", self.camera_id)
+                    self.status_changed.emit("无摄像头信号，正在重试...")
+                    self.msleep(self.retry_interval_ms)
+                    continue
+
+                # 预览不需要高分辨率，320x240 足够看清，同时也节省 CPU
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                consecutive_failures = 0
+                logger.info("摄像头 %s 打开成功", self.camera_id)
+                self.status_changed.emit("")
+
             ret, frame = self.cap.read()
             if ret:
+                consecutive_failures = 0
                 # 保存原始 BGR 帧（翻转前），供实时识别线程直接读取做 OCR
                 self.current_raw_frame_bgr = frame.copy()
-                display_frame = (
-                    self._to_gray_bgr(self.current_raw_frame_bgr)
-                    if self.grayscale_enabled else self.current_raw_frame_bgr
-                )
-                self.current_frame_bgr = display_frame.copy()
+                display_frame = self._apply_image_mode(self.current_raw_frame_bgr)
+                current_display_frame = display_frame.copy()
+                self.current_frame_bgr = current_display_frame
                 # OpenCV 默认 BGR，Qt 要求 RGB
                 rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_frame.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
                 pixmap = QPixmap.fromImage(qt_image)
-                self.frame_ready.emit(pixmap)
+                self.frame_ready.emit(pixmap, current_display_frame.copy())
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= self.max_read_failures_before_reopen:
+                    logger.warning(
+                        "摄像头 %s 连续读帧失败 %d 次，释放后重新打开",
+                        self.camera_id,
+                        consecutive_failures,
+                    )
+                    self.status_changed.emit("无摄像头信号，正在重连...")
+                    self.cap.release()
+                    self.cap = None
+                    self.current_frame_bgr = None
+                    self.current_raw_frame_bgr = None
+                    consecutive_failures = 0
             # 约 33FPS，足够流畅同时不占满 CPU
             self.msleep(30)
+
+        if self.cap:
+            self.cap.release()
+            self.cap = None
 
     def stop(self):
         """外部调用：请求线程退出并释放摄像头。
@@ -121,3 +171,4 @@ class CameraWorker(QThread):
         self.is_running = False
         if self.cap:
             self.cap.release()
+            self.cap = None

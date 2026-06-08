@@ -36,8 +36,10 @@ AXIS_PULSES_PER_MM = {"x": 1000, "y": 500, "z": 2000}
 AXIS_SOFT_LIMITS = {
     "x": (0, 230000),
     "y": (0, 210000),
-    "z": (-90000, 60000),
+    "z": (-220000, 60000),
 }
+POST_HOME_Z_POSITION = -170000
+POST_HOME_Z_SPEED = 1000
 
 
 @dataclass
@@ -293,7 +295,21 @@ class ModbusMotionController:
             return MotionCommandResult(False, f"机械回零触发失败：{exc}")
 
         logger.info("机械回零完成，机械零点反馈=%s", self.home_position)
-        return MotionCommandResult(True, "机械回零完成。", {"position": dict(self.last_position)})
+        post_home_result = self.move_z_to_position(POST_HOME_Z_POSITION, POST_HOME_Z_SPEED)
+        if not post_home_result.success:
+            self.device_initialized = False
+            return MotionCommandResult(
+                False,
+                f"机械回零完成，但Z轴移动到 {POST_HOME_Z_POSITION} 失败：{post_home_result.message}",
+                post_home_result.data,
+            )
+
+        positions = post_home_result.data.get("position") or dict(self.last_position)
+        return MotionCommandResult(
+            True,
+            f"机械回零完成，Z轴已移动到 {POST_HOME_Z_POSITION}。",
+            {"position": positions},
+        )
 
     def _wait_until_positions_stable(
         self,
@@ -438,6 +454,15 @@ class ModbusMotionController:
 
     def move_z_pulses(self, pulses, speed, tolerance=5, timeout=20):
         return self.move_axis_pulses("z", pulses, speed, tolerance, timeout)
+
+    def move_z_to_position(self, target_position, speed, tolerance=5, timeout=20):
+        """把 Z 轴移动到指定累计脉冲位置。"""
+        try:
+            current_z = self.get_axis_position("z")
+            delta = int(round(float(target_position))) - int(current_z)
+        except Exception as exc:
+            return MotionCommandResult(False, f"读取Z轴当前位置失败：{exc}")
+        return self.move_z_pulses(delta, speed, tolerance, timeout)
 
     def move_axis_mm(self, axis: str, distance_mm: float, speed: int, tolerance=5, timeout=20):
         axis_key = self._normalize_axis(axis)

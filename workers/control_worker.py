@@ -149,7 +149,7 @@ class ControlWorker(QThread):
         angle = result.get("angle", 0)
         raw_status = str(result.get("status", ""))
 
-        # 引擎自身报错 -> 直接识别失败；否则交给 MaterialController 判定四态
+        # 引擎自身报错 -> 直接识别失败；否则交给 MaterialController 判定三态
         if raw_status.startswith("error"):
             status, color = "识别失败", "red"
         else:

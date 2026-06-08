@@ -1,15 +1,15 @@
 """检测结果判定逻辑。
 
-本模块把"OCR 识别结果 + 目标型号/角度"翻译成四态产品语义之一：
+本模块把"OCR 识别结果 + 目标型号/角度"翻译成三态产品语义之一：
 
-    正常 / 方向错误 / 型号错误 / 识别失败
+    正常 / 异常 / 识别失败
 
 业务语义
 --------
 - 一个槽位只要能识别出任意文本，就不算"识别失败"。
-- 能识别出文本但全都不含目标型号 -> "型号错误"（红）。
+- 能识别出文本但全都不含目标型号 -> "异常"（红）。
 - 文本含目标型号且角度匹配 -> "正常"（绿）。
-- 文本含目标型号但角度不匹配 -> "方向错误"（红）。
+- 文本含目标型号但角度不匹配 -> "异常"（红）。
 - 完全没有识别到文本 -> "识别失败"（红）。
 """
 
@@ -40,7 +40,7 @@ class MaterialController:
         Returns
         -------
         tuple[str, str]
-            - 第 1 项：中文状态（"正常" / "方向错误" / "型号错误" / "识别失败"）
+            - 第 1 项：中文状态（"正常" / "异常" / "识别失败"）
             - 第 2 项：颜色键（"green" / "red"），供 `MaterialSlot.set_result` 上色
         """
         texts = detected_data.get("texts", [])
@@ -55,8 +55,8 @@ class MaterialController:
         model_match = any(target_up in text.upper() for text in texts)
 
         if model_match:
-            # 型号对 + 角度对 = 正常；型号对 + 角度错 = 方向错误
-            return ("正常", "green") if int(angle) == int(target_angle) else ("方向错误", "red")
+            # 型号对 + 角度对 = 正常；型号对 + 角度错 = 异常
+            return ("正常", "green") if int(angle) == int(target_angle) else ("异常", "red")
 
-        # 识别到文字但不含目标型号 -> 型号错误
-        return "型号错误", "red"
+        # 识别到文字但不含目标型号 -> 异常
+        return "异常", "red"

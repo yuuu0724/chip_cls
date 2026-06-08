@@ -77,7 +77,7 @@ class DataLogger:
         try:
             with open(self.current_file, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow(["时间", "料位", "所有识别文本", "识别角度", "检测结果"])
+                writer.writerow(["时间", "料位", "所有识别文本(置信度)", "识别角度", "检测结果"])
         except Exception as e:
             print(f"创建结果文件失败: {e}")
 
@@ -95,7 +95,7 @@ class DataLogger:
         angle : int
             识别到的方向角度。
         status : str
-            中文状态（"正常" / "方向错误" 等）。
+            中文状态（"正常" / "异常" / "识别失败"）。
 
         写入失败不抛异常，只打印警告 —— 不让日志故障阻断整批检测。
         """
