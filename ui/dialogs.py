@@ -17,7 +17,7 @@ import os
 import tempfile
 
 from motion import x_mm_to_pulses, y_mm_to_pulses
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -639,6 +639,7 @@ class AddTrayDialog(QDialog):
         self,
         existing_ids,
         coordinate_provider=None,
+        center_status_provider=None,
         parent=None,
         initial_data=None,
         edit_mode=False,
@@ -649,9 +650,11 @@ class AddTrayDialog(QDialog):
         self.setStyleSheet("QDialog { background-color: #1a1a1e; } QLabel { color: #ffffff; }")
         self.existing_ids = existing_ids
         self.coordinate_provider = coordinate_provider
+        self.center_status_provider = center_status_provider
         self.initial_data = initial_data or {}
         self.edit_mode = bool(edit_mode)
         self._numeric_spin_editors = {}
+        self._last_center_status = {"ok": False, "message": "等待芯片 ROI 检测..."}
 
         root_layout = QVBoxLayout(self)
         root_layout.setSpacing(10)
@@ -814,6 +817,22 @@ class AddTrayDialog(QDialog):
         motion_label.setStyleSheet(self._LABEL_STYLE)
         layout.addWidget(motion_label)
 
+        self.center_status_label = QLabel("芯片居中状态：等待芯片 ROI 检测...")
+        self.center_status_label.setWordWrap(True)
+        self.center_status_label.setStyleSheet(
+            """
+            color: #FFD60A;
+            background-color: rgba(255, 214, 10, 0.12);
+            border: 2px solid rgba(255, 214, 10, 0.75);
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 18px;
+            font-weight: 800;
+            line-height: 1.4;
+            """
+        )
+        layout.addWidget(self.center_status_label)
+
         self.axis_step_spins = {}
         for axis in ("X", "Y", "Z"):
             axis_row = QHBoxLayout()
@@ -897,6 +916,11 @@ class AddTrayDialog(QDialog):
 
         self._update_custom_spec_state()
         self._apply_initial_data()
+        self._center_status_timer = QTimer(self)
+        self._center_status_timer.setInterval(300)
+        self._center_status_timer.timeout.connect(self._update_center_status)
+        self._center_status_timer.start()
+        self._update_center_status()
 
     def eventFilter(self, obj, event):
         """在编号输入框上点击时自动弹软键盘。
@@ -970,6 +994,10 @@ class AddTrayDialog(QDialog):
         if self.pitch_x_spin.value() <= 0 or self.pitch_y_spin.value() <= 0:
             QMessageBox.warning(self, "提示", "横向间距、纵向间距必须大于 0。")
             return
+        if not self._ensure_chip_centered():
+            return
+        if not self.edit_mode and not self._capture_current_position_as_origin():
+            return
         self.accept()
 
     def get_tray_id(self):
@@ -1027,18 +1055,24 @@ class AddTrayDialog(QDialog):
         return spin
 
     def _get_current_position(self):
+        if not self._ensure_chip_centered():
+            return
+        self._capture_current_position_as_origin()
+
+    def _capture_current_position_as_origin(self):
         if self.coordinate_provider is None:
             QMessageBox.warning(self, "提示", "当前未配置坐标读取接口。")
-            return
+            return False
         position = self.coordinate_provider()
         if not position:
-            return
+            return False
         self.set_current_position(position)
         self.origin_saved.emit({
             "x": int(position["x"]),
             "y": int(position["y"]),
             "z": int(position["z"]),
         })
+        return True
 
     def set_current_position(self, position):
         self.origin_x_spin.setValue(float(position["x"]))
@@ -1048,6 +1082,57 @@ class AddTrayDialog(QDialog):
     def _request_jog(self, axis, direction):
         step = int(self.axis_step_spins[axis].value())
         self.jog_requested.emit(axis, step * int(direction), self.DEFAULT_JOG_SPEED)
+
+    def _update_center_status(self):
+        status = self._read_center_status()
+        self._last_center_status = status
+        if status.get("ok"):
+            color = "#34C759"
+            prefix = "芯片居中参考：已居中" if self.edit_mode else "芯片居中状态：已居中"
+        else:
+            color = "#FFD60A"
+            prefix = "芯片居中参考：未居中" if self.edit_mode else "芯片居中状态：未居中"
+        border_color = "#34C759" if status.get("ok") else "#FFD60A"
+        bg_color = "rgba(52, 199, 89, 0.14)" if status.get("ok") else "rgba(255, 214, 10, 0.12)"
+        self.center_status_label.setStyleSheet(
+            f"""
+            color: {color};
+            background-color: {bg_color};
+            border: 2px solid {border_color};
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 18px;
+            font-weight: 800;
+            line-height: 1.4;
+            """
+        )
+        self.center_status_label.setText(f"{prefix}\n{status.get('message', '')}")
+
+    def _read_center_status(self):
+        if self.center_status_provider is None:
+            return {"ok": False, "message": "当前未配置芯片居中检测接口。"}
+        try:
+            return dict(self.center_status_provider() or {})
+        except Exception as exc:
+            return {"ok": False, "message": f"芯片居中检测失败：{exc}"}
+
+    def _ensure_chip_centered(self):
+        status = self._read_center_status()
+        self._last_center_status = status
+        self._update_center_status()
+        if status.get("ok") or self.edit_mode:
+            return True
+        QMessageBox.warning(
+            self,
+            "芯片未居中",
+            (
+                "请继续移动 X/Y 轴，使第一颗芯片位于摄像头画面中心。\n"
+                "摄像头预览十字变为绿色后，才能获取当前坐标并新增料盘。\n\n"
+                "提示中的脉冲数按画面偏差估算，实际点动方向以现场运动方向为准。\n\n"
+                f"{status.get('message', '')}"
+            ),
+        )
+        return False
 
     def _update_pitch_unit(self):
         if self.pitch_unit_combo.currentData() == "pulses":

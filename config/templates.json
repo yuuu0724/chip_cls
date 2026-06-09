@@ -107,23 +107,23 @@
     "updatedAt": "2026-06-04T15:16:12"
   },
   "1N5": {
-    "angle": 0,
+    "angle": 180,
     "description": "用户从图片手动确认的模板",
     "modelName": "1N5",
     "standardChipModel": "1N5",
     "ocrTexts": [
-      "822",
       "1N5",
-      "JT"
+      "JT",
+      "822"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\1N5_20260605_160920.png",
-    "trayId": "演示2",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\1N5_20260608_210333.png",
+    "trayId": "测试",
     "lightConfig": {
       "light1Voltage": 0.0,
       "light2Voltage": 0.0
     },
     "createdAt": "2026-05-18T09:55:06",
-    "updatedAt": "2026-06-05T16:09:20"
+    "updatedAt": "2026-06-08T21:03:33"
   },
   "CBTLV3245A": {
     "angle": 180,
