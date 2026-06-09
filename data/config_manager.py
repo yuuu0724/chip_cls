@@ -42,6 +42,7 @@ class ConfigManager:
         "modbus_parity": "N",
         "modbus_stopbits": 1,
         "modbus_timeout": 1.0,
+        "post_home_z_position": -170000,
         "device_command_timeout_sec": 5.0,
         "homing_timeout_sec": 60.0,
         "origin_center_tolerance_mm": 2.0,
@@ -65,8 +66,11 @@ class ConfigManager:
             try:
                 with open(self.CONFIG_FILE, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
+                    missing_keys = set(self.DEFAULT_CONFIG) - set(loaded)
                     # 用 update 而不是替换，保证将来新增的默认字段不会丢失
                     self.config.update(loaded)
+                    if missing_keys:
+                        self.save_config()
             except Exception as e:
                 print(f"[警告] 加载配置失败: {e}，使用默认配置")
         else:

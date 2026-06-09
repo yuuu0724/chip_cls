@@ -196,7 +196,12 @@ config/trays_config.json
 - `modbus_port`：默认 `COM14`
 - `modbus_slave_id`：默认 `2`
 - `camera_id`：摄像头索引
+- `post_home_z_position`：机械回零完成后 Z 轴移动到的脉冲位置，默认 `-170000`
 - `image_directory`：批量检测图片目录
+
+启动 logo：
+
+- `config/logo.png`：程序启动时显示的静态 logo。客户可直接替换同名 PNG 文件，重启程序后生效。
 
 料盘配置包含：
 

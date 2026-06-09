@@ -84,6 +84,15 @@ def z_mm_to_pulses(mm: float) -> int:
     return int(float(mm) * AXIS_PULSES_PER_MM["z"])
 
 
+def _config_int(value: Any, default: int) -> int:
+    if value is None or value == "":
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 class ModbusMotionController:
     """通过 Modbus RTU 控制 XYZ 三轴相对运动。"""
 
@@ -96,6 +105,7 @@ class ModbusMotionController:
         parity: str = DEFAULT_PARITY,
         stopbits: int = DEFAULT_STOPBITS,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        post_home_z_position: int = POST_HOME_Z_POSITION,
     ):
         self.port = port or DEFAULT_PORT
         self.slave_id = int(slave_id)
@@ -104,6 +114,7 @@ class ModbusMotionController:
         self.parity = parity or DEFAULT_PARITY
         self.stopbits = int(stopbits)
         self.timeout = float(timeout)
+        self.post_home_z_position = _config_int(post_home_z_position, POST_HOME_Z_POSITION)
 
         self.client = None
         self._lock = threading.RLock()
@@ -122,6 +133,10 @@ class ModbusMotionController:
             parity=config.get("modbus_parity", DEFAULT_PARITY),
             stopbits=config.get("modbus_stopbits", DEFAULT_STOPBITS),
             timeout=config.get("modbus_timeout") or config.get("serial_timeout") or DEFAULT_TIMEOUT_SECONDS,
+            post_home_z_position=_config_int(
+                config.get("post_home_z_position"),
+                POST_HOME_Z_POSITION,
+            ),
         )
 
     @property
@@ -295,19 +310,19 @@ class ModbusMotionController:
             return MotionCommandResult(False, f"机械回零触发失败：{exc}")
 
         logger.info("机械回零完成，机械零点反馈=%s", self.home_position)
-        post_home_result = self.move_z_to_position(POST_HOME_Z_POSITION, POST_HOME_Z_SPEED)
+        post_home_result = self.move_z_to_position(self.post_home_z_position, POST_HOME_Z_SPEED)
         if not post_home_result.success:
             self.device_initialized = False
             return MotionCommandResult(
                 False,
-                f"机械回零完成，但Z轴移动到 {POST_HOME_Z_POSITION} 失败：{post_home_result.message}",
+                f"机械回零完成，但Z轴移动到 {self.post_home_z_position} 失败：{post_home_result.message}",
                 post_home_result.data,
             )
 
         positions = post_home_result.data.get("position") or dict(self.last_position)
         return MotionCommandResult(
             True,
-            f"机械回零完成，Z轴已移动到 {POST_HOME_Z_POSITION}。",
+            f"机械回零完成，Z轴已移动到 {self.post_home_z_position}。",
             {"position": positions},
         )
 

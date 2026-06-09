@@ -810,10 +810,16 @@ class OCRApp(QMainWindow):
     def start_camera_preview(self):
         """启动摄像头预览线程。
 
-        默认打开 camera_id=1（通常是外接相机）。若打开失败，`CameraWorker`
-        会持续重试，UI 保持"无摄像头信号"占位并显示重连状态。
+        从应用配置读取 camera_id。若打开失败，`CameraWorker` 会持续重试，
+        UI 保持"无摄像头信号"占位并显示重连状态。
         """
-        self.camera_worker = CameraWorker(1)
+        app_config = self.services.config_manager.get_config()
+        try:
+            camera_id = int(app_config.get("camera_id", 0))
+        except (TypeError, ValueError):
+            camera_id = 0
+
+        self.camera_worker = CameraWorker(camera_id)
         self.camera_worker.frame_ready.connect(self.update_camera_frame)
         self.camera_worker.status_changed.connect(self.update_camera_status)
         self.camera_worker.start()

@@ -156,6 +156,48 @@ def _init_user_config():
 _init_user_config()
 
 
+def get_user_logo_path():
+    """返回用户可替换的启动 logo 路径。"""
+    return os.path.join(project_root, "config", "logo.png")
+
+
+def show_startup_logo(app):
+    """显示用户可替换的启动 logo；缺失或损坏时静默跳过。"""
+    logo_path = get_user_logo_path()
+    if not os.path.isfile(logo_path):
+        logging.info("未找到启动 logo，跳过显示: %s", logo_path)
+        return None
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QSplashScreen
+
+    pixmap = QPixmap(logo_path)
+    if pixmap.isNull():
+        logging.warning("启动 logo 无法加载，跳过显示: %s", logo_path)
+        return None
+
+    screen = app.primaryScreen()
+    if screen is not None:
+        available = screen.availableGeometry()
+        max_width = max(320, int(available.width() * 0.6))
+        max_height = max(240, int(available.height() * 0.6))
+        if pixmap.width() > max_width or pixmap.height() > max_height:
+            pixmap = pixmap.scaled(
+                max_width,
+                max_height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+    splash = QSplashScreen(pixmap)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+    splash.show()
+    app.processEvents()
+    logging.info("启动 logo 已显示: %s", logo_path)
+    return splash
+
+
 def setup_logging():
     """配置根 logger：同时输出到文件和控制台。
 
@@ -193,10 +235,6 @@ def setup_logging():
     logging.info("日志已初始化 => %s", log_file)
 
 
-from ui.main_window import OCRApp
-from PySide6.QtWidgets import QApplication
-
-
 def main():
     """应用入口：初始化日志 → 建 QApplication → show 主窗口 → 进事件循环。
 
@@ -206,9 +244,17 @@ def main():
     setup_logging()
     logging.info("应用启动, project_root=%s", project_root)
 
+    from PySide6.QtWidgets import QApplication
+
     app = QApplication(sys.argv)
+    splash = show_startup_logo(app)
+
+    from ui.main_window import OCRApp
+
     window = OCRApp()
     window.show()
+    if splash is not None:
+        splash.finish(window)
     sys.exit(app.exec())
 
 
