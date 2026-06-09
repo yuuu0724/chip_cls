@@ -134,6 +134,11 @@ class OCRApp(QMainWindow):
         self.chip_preview_result = None
         self.chip_preview_last_started = 0.0
         self.chip_preview_interval_seconds = 0.35
+        app_config = self.services.config_manager.get_config()
+        self.origin_center_tolerance_mm = float(app_config.get("origin_center_tolerance_mm", 2.0))
+        self.origin_center_tolerance_px = float(app_config.get("origin_center_tolerance_px", 15.0))
+        self.origin_center_x_pulses_per_px = float(app_config.get("origin_center_x_pulses_per_px", 25.0))
+        self.origin_center_y_pulses_per_px = float(app_config.get("origin_center_y_pulses_per_px", 12.5))
 
         self.init_ui()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -479,6 +484,7 @@ class OCRApp(QMainWindow):
         dialog = AddTrayDialog(
             self.services.tray_manager.get_tray_list(),
             coordinate_provider=self._read_current_position_for_dialog,
+            center_status_provider=self.get_origin_center_status,
             parent=self,
         )
         dialog.jog_requested.connect(lambda axis, pulses, speed: self._jog_axis_for_tray_dialog(dialog, axis, pulses, speed))
@@ -523,6 +529,7 @@ class OCRApp(QMainWindow):
         dialog = AddTrayDialog(
             self.services.tray_manager.get_tray_list(),
             coordinate_provider=self._read_current_position_for_dialog,
+            center_status_provider=self.get_origin_center_status,
             parent=self,
             initial_data={"tray_id": tray_id, **tray_info},
             edit_mode=True,
@@ -861,18 +868,19 @@ class OCRApp(QMainWindow):
         frame_h, frame_w = display_frame.shape[:2]
         if result.get("image_shape") == [int(frame_h), int(frame_w)]:
             self._draw_chip_preview_boxes(display_frame, result.get("chips", []))
-        self._draw_preview_center_cross(display_frame)
+        center_status = self.get_origin_center_status()
+        self._draw_preview_center_cross(display_frame, center_status.get("ok", False))
         return self._bgr_to_pixmap(display_frame)
 
     @staticmethod
-    def _draw_preview_center_cross(display_frame):
+    def _draw_preview_center_cross(display_frame, is_centered=False):
         """在预览画面中心画固定十字，辅助芯片摆放居中。"""
         frame_h, frame_w = display_frame.shape[:2]
         center_x = frame_w // 2
         center_y = frame_h // 2
         size = max(18, min(frame_w, frame_h) // 10)
         gap = max(4, size // 6)
-        color = (255, 255, 255)
+        color = (0, 220, 0) if is_centered else (255, 255, 255)
         shadow = (0, 0, 0)
 
         for draw_color, thickness in ((shadow, 3), (color, 1)):
@@ -911,11 +919,72 @@ class OCRApp(QMainWindow):
         cv2.circle(
             display_frame,
             (center_x, center_y),
-            2,
+            3 if is_centered else 2,
             color,
             thickness=1,
             lineType=cv2.LINE_AA,
         )
+
+    def get_origin_center_status(self):
+        """返回首颗芯片 ROI 是否已位于画面中心。"""
+        result = self.chip_preview_result or {}
+        status = str(result.get("status", ""))
+        image_shape = result.get("image_shape") or []
+        if len(image_shape) != 2:
+            return {
+                "ok": False,
+                "message": "等待芯片 ROI 检测...",
+                "tolerance_mm": self.origin_center_tolerance_mm,
+                "tolerance_px": self.origin_center_tolerance_px,
+            }
+
+        chips = result.get("chips") or []
+        selected_index = int(result.get("selected_index", -1))
+        if status != "success" or selected_index < 0 or selected_index >= len(chips):
+            return {
+                "ok": False,
+                "message": "未检测到芯片 ROI，请调整芯片到画面中心。",
+                "tolerance_mm": self.origin_center_tolerance_mm,
+                "tolerance_px": self.origin_center_tolerance_px,
+            }
+
+        chip = chips[selected_index]
+        center = chip.get("center") or []
+        if len(center) != 2:
+            return {
+                "ok": False,
+                "message": "芯片 ROI 中心无效，请重新调整。",
+                "tolerance_mm": self.origin_center_tolerance_mm,
+                "tolerance_px": self.origin_center_tolerance_px,
+            }
+
+        frame_h, frame_w = int(image_shape[0]), int(image_shape[1])
+        dx_px = float(center[0]) - frame_w / 2.0
+        dy_px = float(center[1]) - frame_h / 2.0
+        dx_pulses = dx_px * self.origin_center_x_pulses_per_px
+        dy_pulses = dy_px * self.origin_center_y_pulses_per_px
+        ok = (
+            abs(dx_px) <= self.origin_center_tolerance_px
+            and abs(dy_px) <= self.origin_center_tolerance_px
+        )
+        pulse_hint = f"X {dx_pulses:+.0f} 脉冲，Y {dy_pulses:+.0f} 脉冲"
+        message = (
+            f"已居中：{pulse_hint}"
+            if ok
+            else f"请继续移动：约 {pulse_hint}"
+        )
+        return {
+            "ok": ok,
+            "message": message,
+            "dx_px": dx_px,
+            "dy_px": dy_px,
+            "dx_pulses": dx_pulses,
+            "dy_pulses": dy_pulses,
+            "tolerance_mm": self.origin_center_tolerance_mm,
+            "tolerance_px": self.origin_center_tolerance_px,
+            "x_pulses_per_px": self.origin_center_x_pulses_per_px,
+            "y_pulses_per_px": self.origin_center_y_pulses_per_px,
+        }
 
     @staticmethod
     def _draw_chip_preview_boxes(display_frame, chips):

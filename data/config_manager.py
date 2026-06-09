@@ -44,6 +44,10 @@ class ConfigManager:
         "modbus_timeout": 1.0,
         "device_command_timeout_sec": 5.0,
         "homing_timeout_sec": 60.0,
+        "origin_center_tolerance_mm": 2.0,
+        "origin_center_tolerance_px": 15.0,
+        "origin_center_x_pulses_per_px": 25.0,
+        "origin_center_y_pulses_per_px": 12.5,
     }
 
     def __init__(self):
