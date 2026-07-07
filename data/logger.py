@@ -9,6 +9,7 @@ CSV 列顺序：``时间 | 料位 | 所有识别文本 | 识别角度 | 检测�
 
 import csv
 import os
+import re
 from datetime import datetime
 
 
@@ -26,11 +27,13 @@ class DataLogger:
         self.base_dir = base_dir
         self.sheet_dir = os.path.join(self.base_dir, "sheet")
         self.image_dir = os.path.join(self.base_dir, "images")
+        self.slot_image_root = os.path.join(self.base_dir, "slot_images")
 
         # 当前批次的状态；start_new_batch 会重置
         self.current_file = None          # 当前 CSV 绝对路径
         self.current_image_file = None    # 当前批次结束时要保存的截图路径
         self.current_tray = None          # 当前料盘 ID
+        self.current_slot_image_dir = None
         self.batch_count = 0              # 程序启动以来跑过的批次数
 
         self.expected_slots = 21          # 当前批次应有的槽位数（用于 is_batch_finished）
@@ -39,8 +42,38 @@ class DataLogger:
 
         os.makedirs(self.sheet_dir, exist_ok=True)
         os.makedirs(self.image_dir, exist_ok=True)
+        os.makedirs(self.slot_image_root, exist_ok=True)
 
-    def start_new_batch(self, tray_id="A0001", expected_slots=None):
+    @staticmethod
+    def _safe_path_part(value):
+        text = str(value or "UNKNOWN").strip() or "UNKNOWN"
+        text = re.sub(r'[\\/:*?"<>|]+', "_", text)
+        text = re.sub(r"\s+", " ", text).strip(" .")
+        if not text:
+            text = "UNKNOWN"
+        reserved_names = {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        }
+        if text.upper() in reserved_names:
+            text = f"_{text}"
+        return text[:80]
+
+    def _build_slot_image_dir(self, tray_name, timestamp):
+        base_name = f"{self._safe_path_part(tray_name)}_{timestamp}"
+        path = os.path.join(self.slot_image_root, base_name)
+        if not os.path.exists(path):
+            return path
+
+        suffix = 2
+        while True:
+            candidate = os.path.join(self.slot_image_root, f"{base_name}_{suffix}")
+            if not os.path.exists(candidate):
+                return candidate
+            suffix += 1
+
+    def start_new_batch(self, tray_id="A0001", expected_slots=None, tray_name=None):
         """开始新一轮检测：重置状态、创建新的 CSV 文件。
 
         Parameters
@@ -72,9 +105,11 @@ class DataLogger:
         base_name = f"{self.current_tray}_batch{self.batch_count}_{timestamp}"
         self.current_file = os.path.join(self.sheet_dir, f"{base_name}.csv")
         self.current_image_file = os.path.join(self.image_dir, f"{base_name}.jpg")
+        self.current_slot_image_dir = self._build_slot_image_dir(tray_name or self.current_tray, timestamp)
 
         # 建文件并写表头（utf-8-sig 让 Excel 直接识别中文不乱码）
         try:
+            os.makedirs(self.current_slot_image_dir, exist_ok=True)
             with open(self.current_file, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
                 writer.writerow(["时间", "料位", "所有识别文本(置信度)", "识别角度", "检测结果"])
@@ -82,6 +117,34 @@ class DataLogger:
             print(f"创建结果文件失败: {e}")
 
         return self.current_file
+
+    def save_slot_image(self, slot_id, frame_bgr):
+        """保存单个槽位的真实图像，文件名使用 1 基准槽位序号。"""
+        if self.current_slot_image_dir is None:
+            print("警告：未初始化槽位图片目录，跳过保存")
+            return False
+        if frame_bgr is None:
+            print(f"警告：槽位 {slot_id} 图像为空，跳过保存")
+            return False
+
+        try:
+            slot_no = int(slot_id)
+        except (TypeError, ValueError):
+            slot_no = str(slot_id).strip() or "UNKNOWN"
+
+        output_path = os.path.join(self.current_slot_image_dir, f"{slot_no}.jpg")
+        try:
+            import cv2
+
+            ok, encoded = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if not ok:
+                print(f"槽位图片保存失败：无法编码 {output_path}")
+                return False
+            encoded.tofile(output_path)
+            return True
+        except Exception as e:
+            print(f"槽位图片保存失败：{e}")
+            return False
 
     def log_result(self, slot_id, all_text, angle, status):
         """追加一行单槽位检测结果到 CSV。

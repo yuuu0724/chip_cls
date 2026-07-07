@@ -49,6 +49,8 @@ class ConfigManager:
         "origin_center_tolerance_px": 15.0,
         "origin_center_x_pulses_per_px": 25.0,
         "origin_center_y_pulses_per_px": 12.5,
+        "center_chip_require_center_inside_bbox": True,
+        "center_chip_inside_margin_px": 5,
     }
 
     def __init__(self):

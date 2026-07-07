@@ -1,12 +1,19 @@
 """单个料位显示组件。
 
-每块料盘会由若干个 `MaterialSlot` 组成，代表物理料盘上的一个槽位。
-组件内部只管视觉状态（三态：待机 / 绿 / 红），业务判定在
-`MaterialController.analyze_status` 里完成。
+每块料盘由若干个 ``MaterialSlot`` 组成，代表物理料盘上的一个槽位。
+组件只负责显示槽位编号和三色背景：
+
+- default：灰色，未处理
+- green：绿色，正确
+- red：红色，异常
+
+外部接口保持兼容：``clicked`` 信号、``set_result(status, color_key)``、
+``reset()`` 和 ``status_text/color_key`` 状态字段都保留。
 """
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout
 
 
 class MaterialSlot(QFrame):
@@ -15,127 +22,96 @@ class MaterialSlot(QFrame):
     Parameters
     ----------
     index : int
-        料位编号（1 基准，用于 UI 左上角显示）。内部槽位索引在主窗口和
-        日志里统一使用 0 基准，但在用户看到的位置都要 +1。
+        1 基准的料位编号。对外点击信号仍发射 0 基准索引，兼容主窗口现有逻辑。
     """
 
     clicked = Signal(int)
 
-    def __init__(self, index):
+    _BACKGROUND_COLORS = {
+        "green": "#1a7e1a",
+        "red": "#c41e1e",
+        "default": "#2a2a2e",
+    }
+
+    def __init__(self, index, display_index=None):
         super().__init__()
         self.index = index
-        # 供外部（如 SlotMoveConfirmDialog）读取最近一次识别结果
+        self.display_index = display_index if display_index is not None else index
         self.status_text = "待机"
         self.color_key = "default"
         self.init_ui()
 
     def init_ui(self):
-        """构造内部两行 label：大号编号 + 状态文字。"""
+        """构造只显示槽位编号的居中布局。"""
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(0)
 
-        # 槽位编号（两位数字占位，"07" 比 "7" 视觉更稳）
-        self.num_label = QLabel(f"{self.index:02d}")
+        self.num_label = QLabel(f"{self.display_index:02d}")
         self.num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.num_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.num_label.setStyleSheet(
             """
             color: #ffffff;
-            font-size: 48px;
-            font-weight: 900;
-            font-family: 'Courier New', 'Courier', monospace;
             border: none;
             background: transparent;
-            letter-spacing: 2px;
             """
         )
 
-        # 状态文字（"待机" / "正常" / "异常" 等）
-        self.status_label = QLabel(" ")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet(
-            """
-            color: #ffffff;
-            font-size: 26px;
-            font-weight: 900;
-            font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
-            border: none;
-            background: transparent;
-            line-height: 1.2;
-            """
-        )
-
-        layout.addWidget(self.num_label)
-        layout.addWidget(self.status_label)
-        layout.addStretch()
-
-        # 初始状态统一走 reset() 保证样式与文字一致
+        layout.addWidget(self.num_label, 1, Qt.AlignmentFlag.AlignCenter)
         self.reset()
 
     def set_result(self, status, color_key):
-        """按检测结果刷新状态文字与背景颜色。
+        """按检测结果刷新背景颜色。
 
         Parameters
         ----------
         status : str
-            中文状态（"正常" / "异常" / "识别失败"）。
+            外部传入的状态文本。为保持兼容仍写入 ``status_text``，但不再渲染到界面。
         color_key : str
-            颜色键，目前支持 ``green`` / ``red`` / ``default`` 三种。
-            未识别的颜色键会退回 ``default`` 的深灰。
-
-        视觉规则
-        --------
-        - green：深绿底，常规细边 -> 正常
-        - red：红底 + inset 发光边，更显眼 -> 异常/失败
-        - 其他：深灰底，用作"待机"或未知态的 fallback
+            颜色键，支持 ``green`` / ``red`` / ``default``。未知值回退为灰色。
         """
-        bg_colors = {
-            "green": "#1a7e1a",
-            "red": "#c41e1e",
-            "default": "#2a2a2e",
-        }
-
-        bg_color = bg_colors.get(color_key, bg_colors["default"])
         self.status_text = status
-        self.color_key = color_key
-        self.status_label.setText(status)
-
-        if color_key == "red":
-            # 红色额外叠一层 inset 发光边，让异常状态一眼可见
-            self.setStyleSheet(
-                f"""
-                background-color: {bg_color};
-                border: 2px inset rgba(255, 255, 255, 0.6);
-                border-radius: 8px;
-                box-shadow: inset 0 0 10px rgba(255, 0, 0, 0.3);
-                """
-            )
-        else:
-            self.setStyleSheet(
-                f"""
-                background-color: {bg_color};
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                """
-            )
+        self.color_key = color_key if color_key in self._BACKGROUND_COLORS else "default"
+        self._apply_background(self.color_key)
 
     def reset(self):
-        """恢复为默认"待机"态（深灰底，细边）。"""
+        """恢复为默认未处理状态。"""
         self.status_text = "待机"
         self.color_key = "default"
-        self.status_label.setText("待机")
-        self.setStyleSheet(
-            """
-            background-color: #2a2a2e;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            """
-        )
+        self._apply_background("default")
+
+    def resizeEvent(self, event):
+        """根据格子尺寸调整编号字号，保持水平垂直居中。"""
+        super().resizeEvent(event)
+        self._update_number_font()
 
     def mousePressEvent(self, event):
-        """点击槽位时发出 0 基准槽位索引，供主窗口确认后执行运动。"""
+        """点击料位时发出 0 基准料位索引，供主窗口确认后执行运动。"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.index - 1)
         super().mousePressEvent(event)
+
+    def _apply_background(self, color_key):
+        bg_color = self._BACKGROUND_COLORS.get(color_key, self._BACKGROUND_COLORS["default"])
+        border = "2px solid rgba(255, 255, 255, 0.5)" if color_key == "red" else "1px solid rgba(255, 255, 255, 0.16)"
+        self.setStyleSheet(
+            f"""
+            background-color: {bg_color};
+            border: {border};
+            border-radius: 8px;
+            """
+        )
+        self._update_number_font()
+
+    def _update_number_font(self):
+        side = max(1, min(self.width(), self.height()))
+        font_size = max(12, int(side * 0.42))
+
+        font = QFont("Courier New")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(font_size)
+        font.setWeight(QFont.Weight.Black)
+        self.num_label.setFont(font)

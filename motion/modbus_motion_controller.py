@@ -84,6 +84,13 @@ def z_mm_to_pulses(mm: float) -> int:
     return int(float(mm) * AXIS_PULSES_PER_MM["z"])
 
 
+def pulses_to_mm(axis: str, pulses: float) -> float:
+    axis_key = str(axis).lower()
+    if axis_key not in AXIS_PULSES_PER_MM:
+        raise ValueError(f"非法轴名称：{axis}")
+    return float(pulses) / AXIS_PULSES_PER_MM[axis_key]
+
+
 def _config_int(value: Any, default: int) -> int:
     if value is None or value == "":
         return int(default)
@@ -392,7 +399,7 @@ class ModbusMotionController:
         if not self.device_initialized:
             return MotionCommandResult(False, "设备尚未完成机械回零，禁止运动。")
         if move_pulses == 0:
-            return MotionCommandResult(True, "运动脉冲为 0，未发送运动命令。", {"position": dict(self.last_position)})
+            return MotionCommandResult(True, "运动距离为 0 mm，未发送运动命令。", {"position": dict(self.last_position)})
         if speed <= 0:
             return MotionCommandResult(False, "速度必须大于 0。")
 
@@ -457,7 +464,8 @@ class ModbusMotionController:
 
         return MotionCommandResult(
             False,
-            f"{axis_key.upper()}轴到位超时：目标={expected_pos}，当前位置={current_pos}",
+            f"{axis_key.upper()}轴到位超时：目标={pulses_to_mm(axis_key, expected_pos):.3f} mm，"
+            f"当前位置={pulses_to_mm(axis_key, current_pos):.3f} mm",
             {"start_pos": start_pos, "expected_pos": expected_pos, "current_pos": current_pos},
         )
 
@@ -529,8 +537,8 @@ class ModbusMotionController:
         logical_pos = expected_pos - int(self.home_position.get(axis, 0))
         if logical_pos < min_limit or logical_pos > max_limit:
             return (
-                f"{axis.upper()}轴目标超出软限位：目标相对零点={logical_pos} 脉冲，"
-                f"允许范围 {min_limit} ~ {max_limit}。"
+                f"{axis.upper()}轴目标超出软限位：目标相对零点={pulses_to_mm(axis, logical_pos):.3f} mm，"
+                f"允许范围 {pulses_to_mm(axis, min_limit):.3f} ~ {pulses_to_mm(axis, max_limit):.3f} mm。"
             )
         return None
 
@@ -543,8 +551,8 @@ class ModbusMotionController:
 
     @staticmethod
     def _format_position(position: dict[str, Any]) -> str:
-        return "X={x}, Y={y}, Z={z}".format(
-            x=int(position.get("x", 0)),
-            y=int(position.get("y", 0)),
-            z=int(position.get("z", 0)),
+        return "X={x:.3f} mm, Y={y:.3f} mm, Z={z:.3f} mm".format(
+            x=pulses_to_mm("x", position.get("x", 0)),
+            y=pulses_to_mm("y", position.get("y", 0)),
+            z=pulses_to_mm("z", position.get("z", 0)),
         )

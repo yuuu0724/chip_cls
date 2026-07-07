@@ -118,6 +118,20 @@ class OCREngine:
         self.max_ocr_boxes = 4
         self.max_return_texts = 2
         self.min_rec_score = 0.90
+        self.center_chip_require_center_inside_bbox = True
+        self.center_chip_inside_margin_px = 5
+        try:
+            from data.config_manager import ConfigManager
+
+            app_config = ConfigManager().get_config()
+            self.center_chip_require_center_inside_bbox = bool(
+                app_config.get("center_chip_require_center_inside_bbox", True)
+            )
+            self.center_chip_inside_margin_px = int(
+                app_config.get("center_chip_inside_margin_px", 5)
+            )
+        except Exception as e:
+            logger.warning("读取中心芯片判定配置失败，使用默认值: %s", e)
         self.allowed_chip_chars = set(
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
             "abcdefghijklmnopqrstuvwxyz"
@@ -291,19 +305,28 @@ class OCREngine:
         image_center_x = w / 2.0
         image_center_y = h / 2.0
         ranked = []
+        center_ranked = []
+        margin = max(0, int(self.center_chip_inside_margin_px))
         for index, item in enumerate(chips, start=1):
             x1, y1, x2, y2 = item["bbox"]
             center_x = (x1 + x2) / 2.0
             center_y = (y1 + y2) / 2.0
             distance = ((center_x - image_center_x) ** 2 + (center_y - image_center_y) ** 2) ** 0.5
+            contains_image_center = (
+                x1 - margin <= image_center_x <= x2 + margin
+                and y1 - margin <= image_center_y <= y2 + margin
+            )
             candidate = dict(item)
             candidate["center"] = [float(center_x), float(center_y)]
             candidate["center_distance"] = float(distance)
+            candidate["contains_image_center"] = bool(contains_image_center)
             candidate["selected"] = False
             ranked.append((distance, candidate))
+            if contains_image_center or not self.center_chip_require_center_inside_bbox:
+                center_ranked.append((distance, candidate))
             if log_details:
                 logger.info(
-                    "芯片检测框 %d/%d score=%.4f bbox=%s center=(%.1f, %.1f) center_distance=%.2f",
+                    "芯片检测框 %d/%d score=%.4f bbox=%s center=(%.1f, %.1f) center_distance=%.2f contains_center=%s",
                     index,
                     len(chips),
                     item.get("score", 0.0),
@@ -311,15 +334,27 @@ class OCREngine:
                     center_x,
                     center_y,
                     distance,
+                    contains_image_center,
                 )
 
-        _, selected = min(ranked, key=lambda pair: pair[0])
-        selected["selected"] = True
+        selected = None
+        if center_ranked:
+            _, selected = min(center_ranked, key=lambda pair: pair[0])
+            selected["selected"] = True
+        elif log_details:
+            logger.info(
+                "中心点未落入任何芯片 ROI，判定当前槽位为空；周围候选数量=%d center=(%.1f, %.1f) margin=%d",
+                len(chips),
+                image_center_x,
+                image_center_y,
+                margin,
+            )
         candidates = [item for _, item in ranked]
         return {
             "chips": candidates,
             "selected": selected,
             "image_shape": [int(h), int(w)],
+            "center_empty": selected is None,
         }
 
     def detect_chip_preview(self, image):
@@ -375,7 +410,7 @@ class OCREngine:
             return None
         selected = detection["selected"]
         if selected is None:
-            return None
+            return {"empty_slot": True, "candidate_count": len(detection.get("chips", []))}
 
         x1, y1, x2, y2 = selected["bbox"]
         crop = image[y1 : y2 + 1, x1 : x2 + 1].copy()
@@ -794,6 +829,20 @@ class OCREngine:
                 "box_coordinate": "original",
                 "image_shape": [int(h), int(w)],
                 "status": "empty",
+            }
+        if chip_roi.get("empty_slot"):
+            logger.info(
+                "中心槽位为空，跳过 OCR 文本检测，周围候选数量=%d",
+                chip_roi.get("candidate_count", 0),
+            )
+            return {
+                "angle": 0,
+                "texts": [],
+                "all_texts": [],
+                "items": [],
+                "box_coordinate": "original",
+                "image_shape": [int(h), int(w)],
+                "status": "empty_slot",
             }
 
         roi_bbox = chip_roi["bbox"]

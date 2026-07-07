@@ -164,7 +164,7 @@ class ControlWorker(QThread):
                 logger.warning("无法读取图片: %s", path)
         return images
 
-    def _emit_result(self, slot_index, result):
+    def _emit_result(self, slot_index, result, source_image=None):
         """把单格 OCR 原始结果 -> 业务状态 -> 写日志 + 发信号。
 
         Parameters
@@ -195,6 +195,7 @@ class ControlWorker(QThread):
         )
         # 日志用 1 基准编号；"|" 是多文本的轻量分隔符（CSV 字段内不会与逗号冲突）
         self.data_logger.log_result(slot_index + 1, all_text_with_scores, angle, status)
+        self.data_logger.save_slot_image(slot_index + 1, source_image)
         self.progress_update.emit(slot_index, status, color)
 
     def run(self):
@@ -222,9 +223,11 @@ class ControlWorker(QThread):
             if self._stop_requested or not self._wait_if_paused():
                 break
 
+            source_image = None
             if index < len(files) and files[index] in preloaded:
                 infer_start = time.time()
                 image = preloaded[files[index]]
+                source_image = image.copy()
                 image = self._apply_image_mode(image)
                 result = self.engine.predict_image_from_array(
                     image,
@@ -238,7 +241,7 @@ class ControlWorker(QThread):
 
             if self._stop_requested:
                 break
-            self._emit_result(index, result)
+            self._emit_result(index, result, source_image)
 
         if self._stop_requested:
             logger.info("========== 检测已终止, 总耗时 %.2fs ==========",

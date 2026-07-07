@@ -14,6 +14,7 @@ import sys
 import time
 
 import cv2
+from motion import pulses_to_mm
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -116,6 +117,7 @@ class OCRApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("AI 芯片料盘视觉检测系统")
         self.setStyleSheet(S.MAIN_WINDOW)
+        self._configure_responsive_metrics()
 
         # 服务容器：UI 只依赖这一个对象，解耦具体实现
         self.services = services if services is not None else AppServices.create_default()
@@ -142,6 +144,7 @@ class OCRApp(QMainWindow):
         self._active_task_mode = None
         self._task_stop_requested = False
         self._task_paused = False
+        self._current_slot_order = []
         self._pending_return_to_first_slot = False
         self._return_to_first_slot_callback = None
 
@@ -150,6 +153,57 @@ class OCRApp(QMainWindow):
         self.centralWidget().setEnabled(False)
 
         QTimer.singleShot(0, self.ensure_startup_motion_ready)
+
+    def _configure_responsive_metrics(self):
+        """根据当前显示器分辨率计算主界面尺寸参数。"""
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            screen_w = max(1, available.width())
+            screen_h = max(1, available.height())
+        else:
+            screen_w, screen_h = 1024, 768
+
+        self._ui_scale = max(0.85, min(1.25, min(screen_w / 1024.0, screen_h / 768.0)))
+        self._main_margin = max(6, int(10 * self._ui_scale))
+        self._main_spacing = max(6, int(10 * self._ui_scale))
+        self._right_panel_width = max(280, min(380, int(screen_w * 0.30)))
+        self._grid_spacing = max(3, int(5 * self._ui_scale))
+        self._slot_min_size = max(28, int(32 * self._ui_scale))
+        self._slot_max_size = max(58, int(76 * self._ui_scale))
+        self._grid_rows = 1
+        self._grid_cols = 1
+
+    def _build_status_color_legend(self):
+        """构造槽位颜色含义提示。"""
+        legend = QWidget()
+        layout = QHBoxLayout(legend)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        title = QLabel("颜色:")
+        title.setStyleSheet(S.COLOR_LEGEND_TITLE)
+        layout.addWidget(title)
+        layout.addWidget(self._build_status_legend_item("未处理", S.COLOR_LEGEND_SWATCH_DEFAULT))
+        layout.addWidget(self._build_status_legend_item("正确", S.COLOR_LEGEND_SWATCH_GREEN))
+        layout.addWidget(self._build_status_legend_item("异常", S.COLOR_LEGEND_SWATCH_RED))
+        return legend
+
+    def _build_status_legend_item(self, text, swatch_style):
+        item = QWidget()
+        layout = QHBoxLayout(item)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        swatch = QFrame()
+        swatch.setFixedSize(14, 14)
+        swatch.setStyleSheet(swatch_style)
+        layout.addWidget(swatch)
+
+        label = QLabel(text)
+        label.setStyleSheet(S.COLOR_LEGEND_TEXT)
+        layout.addWidget(label)
+        return item
 
     def init_ui(self):
         """构建主窗口 UI：左（料盘网格+顶部控制）+ 右（摄像头/配置/任务）。
@@ -165,85 +219,117 @@ class OCRApp(QMainWindow):
 
         # 主布局：左右二栏，左侧占 75% 宽
         main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(
+            self._main_margin,
+            self._main_margin,
+            self._main_margin,
+            self._main_margin,
+        )
+        main_layout.setSpacing(self._main_spacing)
 
         # ========== 左侧：料位网格 + 顶部控制 ==========
-        left_layout = QVBoxLayout()
+        left_panel = QWidget()
+        left_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(8)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
         # --- 顶部料盘选择和参数区 ---
-        top_control_layout = QHBoxLayout()
-        top_control_layout.setSpacing(8)
+        top_control_widget = QWidget()
+        top_control_layout = QVBoxLayout(top_control_widget)
+        top_control_layout.setContentsMargins(0, 0, 0, 0)
+        top_control_layout.setSpacing(4)
+
+        tray_control_row = QHBoxLayout()
+        tray_control_row.setSpacing(8)
+
+        info_control_row = QHBoxLayout()
+        info_control_row.setSpacing(8)
 
         # 料盘选择下拉
         tray_label = QLabel("料盘:")
         tray_label.setStyleSheet(S.LABEL_TITLE)
-        top_control_layout.addWidget(tray_label)
+        tray_control_row.addWidget(tray_label)
 
         self.tray_combo = QComboBox()
         self.tray_combo.setMaximumWidth(140)
         self.tray_combo.setMinimumHeight(42)
         self.tray_combo.setStyleSheet(S.TRAY_COMBO)
 
-        # 从 tray_manager 拉取全部料盘写入下拉（userData 用 tray_id 便于反查）
+        # 从 tray_manager 拉取全部料盘写入下拉（名称本身作为唯一 key）
         for tray_id in self.services.tray_manager.get_tray_list():
-            self.tray_combo.addItem(tray_id, tray_id)
+            tray_info = self.services.tray_manager.get_tray_info(tray_id) or {}
+            self.tray_combo.addItem(tray_info.get("name") or tray_id, tray_id)
 
         self.tray_combo.currentIndexChanged.connect(self.on_tray_changed)
-        top_control_layout.addWidget(self.tray_combo)
+        tray_control_row.addWidget(self.tray_combo)
 
         # 新增料盘按钮
         add_tray_btn = QPushButton("＋ 新增料盘")
         add_tray_btn.setMinimumHeight(42)
         add_tray_btn.setStyleSheet(S.ADD_TRAY_BTN)
         add_tray_btn.clicked.connect(self.add_new_tray)
-        top_control_layout.addWidget(add_tray_btn)
+        tray_control_row.addWidget(add_tray_btn)
 
         edit_tray_btn = QPushButton("编辑料盘")
         edit_tray_btn.setMinimumHeight(42)
         edit_tray_btn.setStyleSheet(S.ADD_TRAY_BTN)
         edit_tray_btn.clicked.connect(self.edit_current_tray)
-        top_control_layout.addWidget(edit_tray_btn)
+        tray_control_row.addWidget(edit_tray_btn)
 
         # 删除料盘按钮（红色警示色）
         delete_tray_btn = QPushButton("－ 删除料盘")
         delete_tray_btn.setMinimumHeight(42)
         delete_tray_btn.setStyleSheet(S.DELETE_TRAY_BTN)
         delete_tray_btn.clicked.connect(self.delete_current_tray)
-        top_control_layout.addWidget(delete_tray_btn)
+        tray_control_row.addWidget(delete_tray_btn)
+
+        tray_control_row.addStretch()
 
         # 型号实时显示（只读文字）
         model_label = QLabel("型号:")
         model_label.setStyleSheet(S.LABEL_TITLE)
-        top_control_layout.addWidget(model_label)
+        info_control_row.addWidget(model_label)
 
         self.model_display = QLabel("ATMLH904")
         self.model_display.setStyleSheet(S.VALUE_HIGHLIGHT)
         self.model_display.setMinimumWidth(140)
-        top_control_layout.addWidget(self.model_display)
+        info_control_row.addWidget(self.model_display)
 
         # 角度实时显示（只读文字）
         angle_label = QLabel("角度:")
         angle_label.setStyleSheet(S.LABEL_TITLE)
-        top_control_layout.addWidget(angle_label)
+        info_control_row.addWidget(angle_label)
 
         self.angle_display = QLabel("90°")
         self.angle_display.setStyleSheet(S.VALUE_HIGHLIGHT)
         self.angle_display.setMinimumWidth(60)
-        top_control_layout.addWidget(self.angle_display)
+        info_control_row.addWidget(self.angle_display)
 
-        top_control_layout.addStretch()
+        info_control_row.addSpacing(12)
+        info_control_row.addWidget(self._build_status_color_legend())
+        info_control_row.addStretch()
 
-        left_layout.addLayout(top_control_layout)
+        top_control_layout.addLayout(tray_control_row)
+        top_control_layout.addLayout(info_control_row)
+        left_layout.addWidget(top_control_widget)
         
         # --- 料位网格区（根据料盘规格动态生成） ---
-        grid_container = QWidget()
-        grid_container.setStyleSheet("background-color: #1a1f2e;")
-        self.grid_layout = QGridLayout(grid_container)
-        self.grid_layout.setSpacing(12)
+        self.grid_scroll = QScrollArea()
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.grid_scroll.setStyleSheet("QScrollArea { border: none; background-color: #1a1f2e; }")
+
+        self.grid_container = QWidget()
+        self.grid_container.setStyleSheet("background-color: #1a1f2e;")
+        self.grid_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setSpacing(self._grid_spacing)
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.grid_scroll.setWidget(self.grid_container)
 
         # 首次用当前选中料盘的规格铺网格
         first_tray_id = self.tray_combo.currentData()
@@ -253,10 +339,21 @@ class OCRApp(QMainWindow):
         )
         self._rebuild_grid(rows, cols)
 
-        left_layout.addWidget(grid_container, 1)
+        left_layout.addWidget(self.grid_scroll, 1)
 
         # ========== 右侧：摄像头 + 配置中心 + 任务控制 ==========
-        right_layout = QVBoxLayout()
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        right_scroll.setFixedWidth(self._right_panel_width)
+        right_scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+
+        right_panel = QWidget()
+        right_panel.setMinimumWidth(self._right_panel_width - 18)
+        right_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(5)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -397,13 +494,15 @@ class OCRApp(QMainWindow):
         button_section_layout.addLayout(bottom_action_row)
 
         right_layout.addWidget(button_section, 2)
+        right_scroll.setWidget(right_panel)
 
-        # 左右布局比例 5:2，适当放大右侧摄像头预览宽度
-        main_layout.addLayout(left_layout, 5)
-        main_layout.addLayout(right_layout, 2)
+        # 左侧料盘自适应缩放，右侧操作区保持完整可见。
+        main_layout.addWidget(left_panel, 1)
+        main_layout.addWidget(right_scroll, 0)
 
-        # 工业屏直接全屏，避免标题栏占用可视区
+        # 工业屏直接全屏，避免标题栏占用可视区。
         self.showFullScreen()
+        QTimer.singleShot(0, self._update_slot_sizes)
 
     def on_tray_changed(self):
         """料盘切换事件。
@@ -463,19 +562,66 @@ class OCRApp(QMainWindow):
             slot.deleteLater()
         self.slots.clear()
 
-        total = rows * cols
+        self._grid_rows = max(1, int(rows))
+        self._grid_cols = max(1, int(cols))
+        total = self._grid_rows * self._grid_cols
         for i in range(total):
-            slot = MaterialSlot(i + 1)
-            slot.setMinimumSize(70, 70)
+            slot = MaterialSlot(i + 1, display_index=self._display_slot_number(i))
+            slot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             slot.clicked.connect(self.move_to_slot)
-            self.grid_layout.addWidget(slot, i // cols, i % cols)
+            self.grid_layout.addWidget(slot, i // self._grid_cols, i % self._grid_cols)
             self.slots.append(slot)
+        QTimer.singleShot(0, self._update_slot_sizes)
+
+    def _display_slot_number(self, slot_index):
+        """把物理槽位索引转换成当前检测顺序下的显示编号。"""
+        cols = max(1, int(getattr(self, "_grid_cols", 1)))
+        rows = max(1, int(getattr(self, "_grid_rows", 1)))
+        try:
+            index = int(slot_index)
+        except (TypeError, ValueError):
+            return 1
+        row = max(0, min(rows - 1, index // cols))
+        col = max(0, min(cols - 1, index % cols))
+        return (rows - 1 - row) * cols + col + 1
+
+    def _update_slot_sizes(self):
+        """根据料盘区域可用空间自适应计算槽位尺寸。
+
+        10x10 是 1024x768 工业屏的保底完整显示目标；更大规格低于可读
+        尺寸时启用滚动兜底，保证右侧操作面板不被挤压。
+        """
+        if not self.slots or not hasattr(self, "grid_scroll"):
+            return
+
+        rows = max(1, self._grid_rows)
+        cols = max(1, self._grid_cols)
+        viewport = self.grid_scroll.viewport().size()
+        available_w = max(1, viewport.width() - 2)
+        available_h = max(1, viewport.height() - 2)
+        spacing = self._grid_spacing
+
+        slot_by_w = (available_w - spacing * (cols - 1)) / cols
+        slot_by_h = (available_h - spacing * (rows - 1)) / rows
+        slot_size = int(min(slot_by_w, slot_by_h, self._slot_max_size))
+        slot_size = max(self._slot_min_size, slot_size)
+
+        grid_w = cols * slot_size + spacing * (cols - 1)
+        grid_h = rows * slot_size + spacing * (rows - 1)
+        self.grid_container.setMinimumSize(grid_w, grid_h)
+
+        for slot in self.slots:
+            slot.setFixedSize(slot_size, slot_size)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._update_slot_sizes)
 
     def add_new_tray(self):
         """弹出"新增料盘"对话框并把结果写回 tray_manager。
 
         用户点击确认后：
-        1. 以 `料盘 {tray_id}` 为默认名写入配置
+        1. 以用户输入的料盘名称作为唯一 key 写入配置
         2. 追加到下拉末尾并切换过去（触发 `on_tray_changed` 重建网格）
         """
         if self.motion_worker is not None and self.motion_worker.isRunning():
@@ -517,10 +663,11 @@ class OCRApp(QMainWindow):
 
         tray_data = dialog.get_tray_data()
         tray_id = tray_data["tray_id"]
+        tray_name = tray_data["name"]
         spec_key = tray_data["spec"]
         self.services.tray_manager.add_tray(
             tray_id,
-            name=tray_id,
+            name=tray_name,
             description="",
             model="",
             angle=0,
@@ -535,10 +682,9 @@ class OCRApp(QMainWindow):
             origin_z=tray_data["origin_z"],
         )
 
-        tray_info = self.services.tray_manager.get_tray_info(tray_id)
-        self.tray_combo.addItem(tray_id, tray_id)
+        self.tray_combo.addItem(tray_name, tray_id)
         self.tray_combo.setCurrentIndex(self.tray_combo.count() - 1)
-        QMessageBox.information(self, "新增成功", f"料盘 {tray_id} 已新增。")
+        QMessageBox.information(self, "新增成功", f"料盘 {tray_name} 已新增。")
 
     def edit_current_tray(self):
         tray_id = self.tray_combo.currentData()
@@ -564,9 +710,16 @@ class OCRApp(QMainWindow):
             return
 
         tray_data = dialog.get_tray_data()
+        new_tray_id = tray_data["tray_id"]
+        if new_tray_id != tray_id:
+            if not self.services.tray_manager.rename_tray(tray_id, new_tray_id):
+                QMessageBox.warning(self, "保存失败", f"料盘编号 {new_tray_id} 已存在或无效。")
+                return
+            tray_id = new_tray_id
+
         self.services.tray_manager.update_tray(
             tray_id,
-            name=tray_id,
+            name=new_tray_id,
             spec=tray_data["spec"],
             rows=tray_data["rows"],
             cols=tray_data["cols"],
@@ -580,9 +733,10 @@ class OCRApp(QMainWindow):
             },
         )
         index = self.tray_combo.currentIndex()
-        self.tray_combo.setItemText(index, tray_id)
+        self.tray_combo.setItemText(index, new_tray_id)
+        self.tray_combo.setItemData(index, new_tray_id)
         self.on_tray_changed()
-        QMessageBox.information(self, "保存成功", f"料盘 {tray_id} 已更新。")
+        QMessageBox.information(self, "保存成功", f"料盘 {new_tray_id} 已更新。")
 
     def delete_current_tray(self):
         """删除当前下拉里选中的料盘。
@@ -598,6 +752,8 @@ class OCRApp(QMainWindow):
         if not tray_id:
             QMessageBox.warning(self, "提示", "当前没有选中的料盘。")
             return
+        tray_info = self.services.tray_manager.get_tray_info(tray_id) or {}
+        tray_name = tray_info.get("name") or tray_id
 
         if self.tray_combo.count() <= 1:
             QMessageBox.warning(self, "提示", "至少保留一个料盘，不能全部删除。")
@@ -610,7 +766,7 @@ class OCRApp(QMainWindow):
         reply = QMessageBox.question(
             self,
             "确认删除",
-            f"确定删除料盘 {tray_id} 吗？此操作不可撤销。",
+            f"确定删除料盘 {tray_name} 吗？此操作不可撤销。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -620,7 +776,7 @@ class OCRApp(QMainWindow):
         if not self.services.tray_manager.delete_tray(tray_id):
             QMessageBox.warning(
                 self, "删除失败",
-                f"编号 {tray_id} 不允许删除（默认料盘受保护）。",
+                f"料盘 {tray_name} 不允许删除（默认料盘受保护）。",
             )
             return
 
@@ -788,6 +944,34 @@ class OCRApp(QMainWindow):
     def _is_live_running(self):
         return self.live_worker is not None and self.live_worker.isRunning()
 
+    @staticmethod
+    def _build_bottom_to_top_slot_order(rows, cols):
+        """生成从下到上、每行从左到右的 0 基准槽位顺序。"""
+        rows = int(rows)
+        cols = int(cols)
+        return [
+            row * cols + col
+            for row in range(rows - 1, -1, -1)
+            for col in range(cols)
+        ]
+
+    def _first_detection_slot_index(self):
+        if self._current_slot_order:
+            return self._current_slot_order[0]
+        return 0
+
+    @staticmethod
+    def _format_axis_mm(axis, pulses):
+        return f"{pulses_to_mm(axis, pulses):.3f} mm"
+
+    @classmethod
+    def _format_position_mm(cls, position):
+        return (
+            f"X={cls._format_axis_mm('x', position.get('x', 0))}, "
+            f"Y={cls._format_axis_mm('y', position.get('y', 0))}, "
+            f"Z={cls._format_axis_mm('z', position.get('z', 0))}"
+        )
+
     def toggle_pause_current_task(self):
         """暂停或继续当前检测任务。"""
         if self._active_task_mode == "live" and self._is_live_running():
@@ -807,7 +991,7 @@ class OCRApp(QMainWindow):
             self.statusBar().showMessage("检测已暂停。", 3000)
 
     def stop_current_task(self):
-        """终止当前检测任务，并在可执行时返回槽位 1。"""
+        """终止当前检测任务，并在可执行时返回本次检测的起始槽位。"""
         if self._active_task_mode is None and not self._is_live_running():
             return
 
@@ -824,12 +1008,13 @@ class OCRApp(QMainWindow):
             self._request_return_to_first_slot(self._finish_stopped_task_after_return)
 
     def _request_return_to_first_slot(self, callback=None):
-        """请求设备回到第一个槽位；若运动中则排队到当前运动结束后执行。"""
+        """请求设备回到本次检测的起始槽位；若运动中则排队到当前运动结束后执行。"""
         if callback is not None:
             self._return_to_first_slot_callback = callback
         self._pending_return_to_first_slot = True
         if self.motion_worker is not None and self.motion_worker.isRunning():
-            self.statusBar().showMessage("当前运动完成后将返回槽位 1。", 3000)
+            slot_no = self._display_slot_number(self._first_detection_slot_index())
+            self.statusBar().showMessage(f"当前运动完成后将返回槽位 {slot_no}。", 3000)
             return
         self._start_return_to_first_slot()
 
@@ -843,18 +1028,20 @@ class OCRApp(QMainWindow):
                 callback(success, message)
 
         if not self.device_controller.is_initialized:
-            finish(False, "设备尚未复位，无法自动返回槽位 1。")
+            finish(False, "设备尚未复位，无法自动返回检测起始槽位。")
             return
 
         tray_id = self.tray_combo.currentData()
+        slot_index = self._first_detection_slot_index()
         try:
-            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, slot_index)
         except ValueError as exc:
             finish(False, str(exc))
             return
 
+        slot_no = self._display_slot_number(slot_index)
         self._run_motion_task(
-            "正在返回槽位 1...",
+            f"正在返回槽位 {slot_no}...",
             lambda: self.device_controller.move_to_coordinate(
                 first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
             ),
@@ -868,10 +1055,11 @@ class OCRApp(QMainWindow):
         self._active_task_mode = None
         self._task_stop_requested = False
         self._set_task_controls_idle()
+        slot_no = self._display_slot_number(self._first_detection_slot_index())
         if success:
-            QMessageBox.information(self, "已结束", "检测任务已结束，并已返回槽位 1。")
+            QMessageBox.information(self, "已结束", f"检测任务已结束，并已返回槽位 {slot_no}。")
         else:
-            QMessageBox.warning(self, "已结束", f"检测任务已结束，但返回槽位 1 失败：{message}")
+            QMessageBox.warning(self, "已结束", f"检测任务已结束，但返回槽位 {slot_no} 失败：{message}")
         self.setFocus()
 
     def move_to_slot(self, slot_index):
@@ -885,12 +1073,12 @@ class OCRApp(QMainWindow):
             QMessageBox.warning(self, "坐标计算失败", str(exc))
             return
 
-        slot_no = slot_index + 1
+        slot_no = self._display_slot_number(slot_index)
         reply = QMessageBox.question(
             self,
             "移动到槽位",
             f"确定移动到槽位 {slot_no} 吗？\n\n"
-            f"目标坐标：X={int(coord['x'])}, Y={int(coord['y'])}, Z={int(coord['z'])} 脉冲",
+            f"目标坐标：{self._format_position_mm(coord)}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -915,7 +1103,7 @@ class OCRApp(QMainWindow):
         return result.data
 
     def _jog_axis_for_tray_dialog(self, dialog, axis, pulses, speed):
-        """新增/编辑料盘弹窗里的三轴点动。"""
+        """新增/编辑料盘弹窗里的三轴点动，UI 显示 mm，底层仍按脉冲执行。"""
         if not self._validate_before_operation(require_motion_ready=True):
             return
 
@@ -925,7 +1113,7 @@ class OCRApp(QMainWindow):
                 dialog.set_current_position(position)
 
         self._run_motion_task(
-            f"{axis.upper()}轴点动 {int(pulses)} 脉冲...",
+            f"{axis.upper()}轴点动 {self._format_axis_mm(axis, pulses)}...",
             lambda: self.device_controller.move_axis_pulses(axis, int(pulses), int(speed)),
             on_success=after_move,
             show_success=False,
@@ -1107,15 +1295,17 @@ class OCRApp(QMainWindow):
         dy_px = float(center[1]) - frame_h / 2.0
         dx_pulses = dx_px * self.origin_center_x_pulses_per_px
         dy_pulses = dy_px * self.origin_center_y_pulses_per_px
+        dx_mm = pulses_to_mm("x", dx_pulses)
+        dy_mm = pulses_to_mm("y", dy_pulses)
         ok = (
             abs(dx_px) <= self.origin_center_tolerance_px
             and abs(dy_px) <= self.origin_center_tolerance_px
         )
-        pulse_hint = f"X {dx_pulses:+.0f} 脉冲，Y {dy_pulses:+.0f} 脉冲"
+        distance_hint = f"X {dx_mm:+.3f} mm，Y {dy_mm:+.3f} mm"
         message = (
-            f"已居中：{pulse_hint}"
+            f"已居中：{distance_hint}"
             if ok
-            else f"请继续移动：约 {pulse_hint}"
+            else f"请继续移动：约 {distance_hint}"
         )
         return {
             "ok": ok,
@@ -1124,6 +1314,8 @@ class OCRApp(QMainWindow):
             "dy_px": dy_px,
             "dx_pulses": dx_pulses,
             "dy_pulses": dy_pulses,
+            "dx_mm": dx_mm,
+            "dy_mm": dy_mm,
             "tolerance_mm": self.origin_center_tolerance_mm,
             "tolerance_px": self.origin_center_tolerance_px,
             "x_pulses_per_px": self.origin_center_x_pulses_per_px,
@@ -1483,7 +1675,7 @@ class OCRApp(QMainWindow):
         - 实时识别同时只能运行一个；
 
         执行流程：
-        1. 先移动到当前料盘的首个槽位原点；
+        1. 先移动到当前料盘本次检测顺序的起始槽位；
         2. 建立新的 CSV 批次记录并重置所有槽位；
         3. 启动 ``LiveInspectionWorker``，后续槽位由 UI 自动移槽后继续。
         """
@@ -1505,18 +1697,26 @@ class OCRApp(QMainWindow):
             return
 
         tray_id = self.tray_combo.currentData()
+        rows, cols = self.services.tray_manager.get_tray_dimensions(tray_id)
+        slot_order = self._build_bottom_to_top_slot_order(rows, cols)
+        if not slot_order:
+            QMessageBox.warning(self, "提示", "当前料盘没有可检测槽位。")
+            return
+        first_slot_index = slot_order[0]
         try:
-            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, first_slot_index)
         except ValueError as exc:
             QMessageBox.warning(self, "坐标计算失败", str(exc))
             return
 
+        self._current_slot_order = slot_order
         self._active_task_mode = "live_starting"
         self._task_stop_requested = False
         self._task_paused = False
         self._set_task_controls_running(pause_enabled=False)
+        first_slot_no = self._display_slot_number(first_slot_index)
         self._run_motion_task(
-            "正在移动到槽位 1...",
+            f"正在移动到槽位 {first_slot_no}...",
             lambda: self.device_controller.move_to_coordinate(
                 first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
             ),
@@ -1537,7 +1737,9 @@ class OCRApp(QMainWindow):
         self._active_task_mode = "live"
         self._set_task_controls_running(pause_enabled=True)
         self.services.data_logger.start_new_batch(
-            tray_id, expected_slots=len(self.slots),
+            tray_id,
+            expected_slots=len(self.slots),
+            tray_name=self.tray_combo.currentText(),
         )
 
         for slot in self.slots:
@@ -1550,6 +1752,7 @@ class OCRApp(QMainWindow):
             target_a=self.angle_input.text(),
             data_logger=self.services.data_logger,
             total_slots=len(self.slots),
+            slot_order=self._current_slot_order,
             mode="auto",
         )
         self.live_worker.slot_recognized.connect(self.update_slot_ui)
@@ -1587,7 +1790,7 @@ class OCRApp(QMainWindow):
                 self.live_worker.confirm_move()
 
         self._run_motion_task(
-            f"自动移动到槽位 {next_slot_index + 1}...",
+            f"自动移动到槽位 {self._display_slot_number(next_slot_index)}...",
             lambda: self.device_controller.move_to_coordinate(
                 coord["x"], coord["y"], coord["z"], self._motion_speed()
             ),
@@ -1621,10 +1824,11 @@ class OCRApp(QMainWindow):
         self._active_task_mode = None
         self._task_stop_requested = False
         self._set_task_controls_idle()
+        slot_no = self._display_slot_number(self._first_detection_slot_index())
         if success:
-            QMessageBox.information(self, "完成", "实时识别已完成，并已返回槽位 1。")
+            QMessageBox.information(self, "完成", f"实时识别已完成，并已返回槽位 {slot_no}。")
         else:
-            QMessageBox.warning(self, "回槽位 1 失败", f"实时识别已完成，但返回槽位 1 失败：{message}")
+            QMessageBox.warning(self, "回槽位失败", f"实时识别已完成，但返回槽位 {slot_no} 失败：{message}")
         self.setFocus()
 
     def keyPressEvent(self, event):

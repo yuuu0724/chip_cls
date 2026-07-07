@@ -34,6 +34,31 @@ LABEL_TITLE = "color: #a1a1a6; font-size: 15px; font-weight: 600;"
 # 顶部绿色强调值（实时显示的型号名 / 角度）
 VALUE_HIGHLIGHT = "color: #34C759; font-size: 18px; font-weight: 700;"
 
+# 顶部槽位颜色图例
+COLOR_LEGEND_TEXT = "color: #d8dde8; font-size: 13px; font-weight: 600;"
+COLOR_LEGEND_TITLE = "color: #a1a1a6; font-size: 13px; font-weight: 600;"
+COLOR_LEGEND_SWATCH_DEFAULT = """
+    QFrame {
+        background-color: #2a2a2e;
+        border: 1px solid rgba(255, 255, 255, 0.30);
+        border-radius: 4px;
+    }
+"""
+COLOR_LEGEND_SWATCH_GREEN = """
+    QFrame {
+        background-color: #1a7e1a;
+        border: 1px solid rgba(255, 255, 255, 0.30);
+        border-radius: 4px;
+    }
+"""
+COLOR_LEGEND_SWATCH_RED = """
+    QFrame {
+        background-color: #c41e1e;
+        border: 1px solid rgba(255, 255, 255, 0.30);
+        border-radius: 4px;
+    }
+"""
+
 
 # ---------- 顶部控制区 ----------
 # 料盘下拉选择框

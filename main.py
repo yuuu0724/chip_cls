@@ -169,7 +169,7 @@ def show_startup_logo(app):
         return None
 
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QPixmap
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
     from PySide6.QtWidgets import QSplashScreen
 
     pixmap = QPixmap(logo_path)
@@ -177,20 +177,56 @@ def show_startup_logo(app):
         logging.warning("启动 logo 无法加载，跳过显示: %s", logo_path)
         return None
 
+    title_text = "元器件字码字符智能识别装置"
     screen = app.primaryScreen()
+    max_width = 620
+    max_height = 460
     if screen is not None:
         available = screen.availableGeometry()
-        max_width = max(320, int(available.width() * 0.6))
-        max_height = max(240, int(available.height() * 0.6))
-        if pixmap.width() > max_width or pixmap.height() > max_height:
-            pixmap = pixmap.scaled(
-                max_width,
-                max_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        max_width = max(420, int(available.width() * 0.62))
+        max_height = max(320, int(available.height() * 0.62))
 
-    splash = QSplashScreen(pixmap)
+    font_size = max(22, min(34, int(max_width / 22)))
+    title_font = QFont("Microsoft YaHei")
+    title_font.setPointSize(font_size)
+    title_font.setWeight(QFont.Weight.Bold)
+    metrics = QFontMetrics(title_font)
+    title_height = metrics.height()
+    title_width = metrics.horizontalAdvance(title_text)
+
+    logo_max_width = max(280, max_width - 80)
+    logo_max_height = max(160, max_height - title_height - 80)
+    if pixmap.width() > logo_max_width or pixmap.height() > logo_max_height:
+        pixmap = pixmap.scaled(
+            logo_max_width,
+            logo_max_height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    canvas_width = max(pixmap.width() + 80, title_width + 80, 520)
+    canvas_height = pixmap.height() + title_height + 72
+    splash_pixmap = QPixmap(canvas_width, canvas_height)
+    splash_pixmap.fill(QColor("#1a1f2e"))
+
+    painter = QPainter(splash_pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    logo_x = (canvas_width - pixmap.width()) // 2
+    painter.drawPixmap(logo_x, 28, pixmap)
+    painter.setFont(title_font)
+    painter.setPen(QColor("#ffffff"))
+    text_y = 28 + pixmap.height() + 24
+    painter.drawText(
+        0,
+        text_y,
+        canvas_width,
+        title_height + 8,
+        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+        title_text,
+    )
+    painter.end()
+
+    splash = QSplashScreen(splash_pixmap)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
     splash.show()
     app.processEvents()

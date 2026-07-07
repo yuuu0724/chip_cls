@@ -1,23 +1,21 @@
 {
   "ATMLH904": {
-    "angle": 90,
+    "angle": 270,
     "description": "用户从图片手动确认的模板",
     "modelName": "ATMLH904",
     "standardChipModel": "ATMLH904",
     "ocrTexts": [
       "ATMLH904",
-      "24C02BN",
-      "SU27",
-      "D"
+      "24C02BN"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\ATMLH904_20260528_160231.png",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\ATMLH904_20260703_110922.png",
     "trayId": "A0001",
     "lightConfig": {
       "light1Voltage": 0.0,
       "light2Voltage": 0.0
     },
-    "createdAt": "2026-05-28T16:02:31",
-    "updatedAt": "2026-05-28T16:02:31"
+    "createdAt": "2026-06-23T15:52:52",
+    "updatedAt": "2026-07-03T11:09:22"
   },
   "MAX485": {
     "angle": 0,
@@ -86,6 +84,23 @@
     },
     "createdAt": "2026-05-14T20:36:23",
     "updatedAt": "2026-05-14T20:42:50"
+  },
+  "SU27": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "SU27",
+    "standardChipModel": "SU27",
+    "ocrTexts": [
+      "SU27"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\SU27_20260623_105206.png",
+    "trayId": "A0001",
+    "lightConfig": {
+      "light1Voltage": 0.0,
+      "light2Voltage": 0.0
+    },
+    "createdAt": "2026-06-23T10:52:06",
+    "updatedAt": "2026-06-23T10:52:06"
   },
   "IEE1931-CQFP100": {
     "angle": 0,

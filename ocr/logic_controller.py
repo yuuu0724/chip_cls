@@ -43,6 +43,10 @@ class MaterialController:
             - 第 1 项：中文状态（"正常" / "异常" / "识别失败"）
             - 第 2 项：颜色键（"green" / "red"），供 `MaterialSlot.set_result` 上色
         """
+        raw_status = str(detected_data.get("status", ""))
+        if raw_status == "empty_slot":
+            return "空槽", "red"
+
         texts = detected_data.get("texts", [])
         angle = detected_data.get("angle", 0)
 

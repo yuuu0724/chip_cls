@@ -63,6 +63,7 @@ class LiveInspectionWorker(QThread):
         target_a,
         data_logger,
         total_slots,
+        slot_order=None,
         mode="auto",
         parent=None,
     ):
@@ -81,6 +82,8 @@ class LiveInspectionWorker(QThread):
             CSV 日志记录器。
         total_slots : int
             当前料盘总槽位数。
+        slot_order : list[int] | None
+            实际执行的 0 基准槽位索引顺序；为空时按自然顺序执行。
         mode : str
             日志字段，当前由 UI 统一使用 ``"auto"``。
         """
@@ -91,6 +94,11 @@ class LiveInspectionWorker(QThread):
         self.target_a = target_a
         self.data_logger = data_logger
         self.total_slots = total_slots
+        self.slot_order = self._normalize_slot_order(slot_order, total_slots)
+        self.display_slot_numbers = {
+            slot_index: order_pos + 1
+            for order_pos, slot_index in enumerate(self.slot_order)
+        }
         self.mode = mode
 
         # 停止标志；外部调用 stop() 后置 True
@@ -99,6 +107,25 @@ class LiveInspectionWorker(QThread):
         self.was_stopped = False
         # 槽位移动确认事件；工人点"确认"或 UI 自动移槽完成后 set()
         self._move_confirmed = threading.Event()
+
+    @staticmethod
+    def _normalize_slot_order(slot_order, total_slots):
+        if slot_order is None:
+            return list(range(total_slots))
+        normalized = []
+        seen = set()
+        for slot_index in slot_order:
+            try:
+                index = int(slot_index)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < total_slots and index not in seen:
+                normalized.append(index)
+                seen.add(index)
+        return normalized or list(range(total_slots))
+
+    def _display_slot_number(self, slot_index):
+        return self.display_slot_numbers.get(slot_index, slot_index + 1)
 
     # ------------------------------------------------------------------
     # 外部控制接口
@@ -174,10 +201,12 @@ class LiveInspectionWorker(QThread):
             logger.warning("摄像头帧为空，无法推理")
             return "识别失败", "red", {"texts": [], "angle": 0, "status": "error: no frame"}
 
+        source_frame = frame.copy()
         result = self.engine.predict_image_from_array(
-            frame,
+            source_frame,
             target_angle=self.target_a,
         )
+        result["_slot_source_frame_bgr"] = source_frame
         raw_status = str(result.get("status", ""))
 
         if raw_status.startswith("error"):
@@ -209,7 +238,7 @@ class LiveInspectionWorker(QThread):
                 if self._stop_flag or not self._wait_if_paused():
                     break
                 self.status_message.emit(
-                    f"槽位 {slot_index + 1} — 第 {attempt + 1} 轮第 {frame_idx + 1} 帧采集中..."
+                    f"槽位 {self._display_slot_number(slot_index)} — 第 {attempt + 1} 轮第 {frame_idx + 1} 帧采集中..."
                 )
                 status, color, result = self._capture_and_infer()
                 round_results.append((status, color, result))
@@ -233,21 +262,21 @@ class LiveInspectionWorker(QThread):
             if len(set(statuses)) == 1:
                 logger.info(
                     "槽位 %02d 连续3帧一致: %s（第 %d 轮）",
-                    slot_index + 1, statuses[0], attempt + 1,
+                    self._display_slot_number(slot_index), statuses[0], attempt + 1,
                 )
                 return round_results[0]
 
             logger.info(
                 "槽位 %02d 第 %d 轮结果不一致: %s，重新采集",
-                slot_index + 1, attempt + 1, statuses,
+                self._display_slot_number(slot_index), attempt + 1, statuses,
             )
             self.status_message.emit(
-                f"槽位 {slot_index + 1} 三帧不一致（{statuses}），重新采集..."
+                f"槽位 {self._display_slot_number(slot_index)} 三帧不一致（{statuses}），重新采集..."
             )
 
         # 超出最大重试次数，取最后一轮第一帧兜底
         if last_results:
-            logger.warning("槽位 %02d 超出最大重试轮次，使用最后一帧结果", slot_index + 1)
+            logger.warning("槽位 %02d 超出最大重试轮次，使用最后一帧结果", self._display_slot_number(slot_index))
             return last_results[0]
 
         return "识别失败", "red", {"texts": [], "angle": 0, "status": "error: max_retry"}
@@ -258,15 +287,19 @@ class LiveInspectionWorker(QThread):
 
     def run(self):
         """线程主体：逐槽位 等确认 → 采集 → 推理 → 发信号。"""
-        logger.info("========== 实时识别开始，共 %d 个槽位，模式=%s ==========",
-                    self.total_slots, self.mode)
+        logger.info(
+            "========== 实时识别开始，共 %d 个槽位，模式=%s，顺序=%s ==========",
+            len(self.slot_order),
+            self.mode,
+            [self._display_slot_number(index) for index in self.slot_order],
+        )
 
-        for slot_index in range(self.total_slots):
+        for order_pos, slot_index in enumerate(self.slot_order):
             if self._stop_flag or not self._wait_if_paused():
                 break
 
             # 非首个槽位：等待 UI 自动移动到新槽位并确认
-            if slot_index > 0:
+            if order_pos > 0:
                 self._move_confirmed.clear()
                 self.request_move_confirm.emit(slot_index)
                 # UI 自动移槽完成后调用 confirm_move()
@@ -277,7 +310,8 @@ class LiveInspectionWorker(QThread):
                 if self._stop_flag or not self._wait_if_paused():
                     break
 
-            self.status_message.emit(f"正在识别槽位 {slot_index + 1}...")
+            display_slot_no = self._display_slot_number(slot_index)
+            self.status_message.emit(f"正在识别槽位 {display_slot_no}...")
             status, color, result = self._infer_slot_with_consensus(slot_index)
 
             if self._stop_flag:
@@ -287,17 +321,21 @@ class LiveInspectionWorker(QThread):
             texts = result.get("texts", [])
             angle = result.get("angle", 0)
             self.data_logger.log_result(
-                slot_index + 1,
+                display_slot_no,
                 self._format_texts_with_scores(result),
                 angle,
                 status,
+            )
+            self.data_logger.save_slot_image(
+                display_slot_no,
+                result.pop("_slot_source_frame_bgr", None),
             )
 
             # 通知 UI 更新槽位显示
             self.slot_recognized.emit(slot_index, status, color)
             logger.info(
                 "槽位 %02d => %s (texts=%s, angle=%s)",
-                slot_index + 1, status, texts, angle,
+                display_slot_no, status, texts, angle,
             )
 
         logger.info("========== 实时识别完成 ==========")

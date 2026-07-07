@@ -273,6 +273,26 @@ class TrayManager:
             return True
         return False
 
+    def rename_tray(self, old_tray_id, new_tray_id):
+        """重命名料盘编号，并保持原有配置内容不变。"""
+        old_id = str(old_tray_id or "").strip()
+        new_id = str(new_tray_id or "").strip()
+        if not new_id:
+            return False
+        if old_id not in self.trays:
+            return False
+        if new_id != old_id and new_id in self.trays:
+            return False
+
+        tray_info = dict(self.trays[old_id])
+        tray_info["name"] = new_id
+        tray_info["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+        if new_id != old_id:
+            del self.trays[old_id]
+        self.trays[new_id] = tray_info
+        self.save_trays()
+        return True
+
     def delete_tray(self, tray_id):
         """删除料盘。
 
