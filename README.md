@@ -196,7 +196,7 @@ config/trays_config.json
 - `modbus_port`：默认 `COM14`
 - `modbus_slave_id`：默认 `2`
 - `camera_id`：摄像头索引
-- `post_home_z_position`：机械回零完成后 Z 轴移动到的脉冲位置，默认 `-170000`
+- `post_home_x_position` / `post_home_y_position` / `post_home_z_position`：机械回零完成后三轴移动到的开发者配置脉冲位置；X/Y 默认为 `null` 不移动，Z 默认 `-170000`
 - `image_directory`：批量检测图片目录
 
 启动 logo：

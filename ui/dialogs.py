@@ -20,6 +20,7 @@ from motion import pulses_to_mm, x_mm_to_pulses, y_mm_to_pulses, z_mm_to_pulses
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
@@ -84,7 +86,7 @@ class TemplateConfirmDialog(QDialog):
         title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
 
-        tips = QLabel("请选择当前模板对应的标准芯片型号；下拉框仅包含本次 OCR 识别结果。")
+        tips = QLabel("请选择当前模板对应的标准芯片字符；可选择一行或多行，检测时所选行必须全部命中。")
         tips.setStyleSheet("color: #FFD60A; font-size: 13px; line-height: 1.5;")
         tips.setWordWrap(True)
         layout.addWidget(tips)
@@ -111,68 +113,79 @@ class TemplateConfirmDialog(QDialog):
         )
         layout.addWidget(self.raw_text_display)
 
-        model_label = QLabel("模板型号:")
+        model_label = QLabel("模板字符（可多选）:")
         model_label.setStyleSheet("color: #a1a1a6; font-size: 13px; margin-top: 6px;")
         layout.addWidget(model_label)
 
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(False)
-        self.model_combo.setMinimumHeight(38)
-        self.model_combo.setStyleSheet(
+        self.text_checkboxes = []
+        checkbox_container = QWidget()
+        checkbox_layout = QVBoxLayout(checkbox_container)
+        checkbox_layout.setContentsMargins(8, 8, 8, 8)
+        checkbox_layout.setSpacing(6)
+        checkbox_style = (
             """
-            QComboBox, QComboBox QLineEdit {
+            QCheckBox {
                 color: #ffffff;
-                background-color: #2a2a2e;
-                border: 1px solid #444449;
-                border-radius: 8px;
-                padding: 8px 12px;
+                spacing: 8px;
                 font-size: 14px;
                 font-weight: 600;
-                selection-background-color: #007AFF;
             }
-            QComboBox {
-                padding-right: 36px;
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 1px solid #6a6a70;
+                border-radius: 3px;
+                background-color: #2a2a2e;
             }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 34px;
-                border-left: 1px solid #444449;
-                border-top-right-radius: 8px;
-                border-bottom-right-radius: 8px;
-                background-color: #3a3a3f;
-            }
-            QComboBox::drop-down:hover {
-                background-color: #4a4a50;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                width: 0px;
-                height: 0px;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 7px solid #ffffff;
-                margin-right: 11px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1a1e;
-                color: #ffffff;
-                border: 1px solid #444449;
-                selection-background-color: #007AFF;
+            QCheckBox::indicator:checked {
+                background-color: #34C759;
+                border-color: #34C759;
             }
             """
         )
         seen = set()
         for text in self.detected_texts:
             text = str(text).strip()
-            if text and text not in seen:
-                self.model_combo.addItem(text)
-                seen.add(text)
-        if detected_model and detected_model in seen:
-            self.model_combo.setCurrentText(detected_model)
-        elif self.model_combo.count() > 0:
-            self.model_combo.setCurrentIndex(0)
-        layout.addWidget(self.model_combo)
+            if not text or text in seen:
+                continue
+            checkbox = QCheckBox(text.replace("&", "&&"))
+            checkbox.setProperty("template_text", text)
+            checkbox.setStyleSheet(checkbox_style)
+            checkbox.setChecked(
+                (detected_model and text == detected_model)
+                or (not detected_model and not self.text_checkboxes)
+            )
+            checkbox_layout.addWidget(checkbox)
+            self.text_checkboxes.append(checkbox)
+            seen.add(text)
+
+        if self.text_checkboxes and not any(checkbox.isChecked() for checkbox in self.text_checkboxes):
+            self.text_checkboxes[0].setChecked(True)
+
+        if not self.text_checkboxes:
+            empty_label = QLabel("未识别到可选择的模板字符")
+            empty_label.setStyleSheet("color: #ff453a; font-size: 13px;")
+            checkbox_layout.addWidget(empty_label)
+        checkbox_layout.addStretch()
+
+        self.text_scroll = QScrollArea()
+        self.text_scroll.setWidgetResizable(True)
+        self.text_scroll.setMinimumHeight(105)
+        self.text_scroll.setMaximumHeight(150)
+        self.text_scroll.setWidget(checkbox_container)
+        self.text_scroll.setStyleSheet(
+            """
+            QScrollArea {
+                background-color: #2a2a2e;
+                border: 1px solid #444449;
+                border-radius: 8px;
+            }
+            QScrollArea QWidget {
+                background-color: #2a2a2e;
+            }
+            """
+        )
+        layout.addWidget(self.text_scroll)
 
         angle_label = QLabel("识别到的角度:")
         angle_label.setStyleSheet("color: #a1a1a6; font-size: 13px; margin-top: 6px;")
@@ -206,14 +219,24 @@ class TemplateConfirmDialog(QDialog):
 
     def accept(self):
         """保存前必须选择或输入模板型号。"""
-        if not self.get_model_name():
-            QMessageBox.warning(self, "提示", "请选择或输入模板型号后再保存。")
+        if not self.get_selected_texts():
+            QMessageBox.warning(self, "提示", "请至少选择一行模板字符后再保存。")
             return
         super().accept()
 
     def get_model_name(self):
         """用户最终确认 / 修改后的模板名（保存到 templates.json 的 key）。"""
-        return self.model_combo.currentText().strip()
+        selected_texts = self.get_selected_texts()
+        return selected_texts[0] if selected_texts else ""
+
+    def get_selected_texts(self):
+        """用户勾选的标准模板字符；后续检测要求这些行全部命中。"""
+        selected = []
+        for checkbox in self.text_checkboxes:
+            text = str(checkbox.property("template_text") or checkbox.text()).strip()
+            if checkbox.isChecked() and text and text not in selected:
+                selected.append(text)
+        return selected
 
     def get_angle(self):
         """用户最终确认 / 修改后的角度（0~359 整数）。"""

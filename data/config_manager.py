@@ -42,6 +42,8 @@ class ConfigManager:
         "modbus_parity": "N",
         "modbus_stopbits": 1,
         "modbus_timeout": 1.0,
+        "post_home_x_position": None,
+        "post_home_y_position": None,
         "post_home_z_position": -170000,
         "device_command_timeout_sec": 5.0,
         "homing_timeout_sec": 60.0,

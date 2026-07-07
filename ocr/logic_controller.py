@@ -21,6 +21,37 @@ class MaterialController:
     """
 
     @staticmethod
+    def _normalize_target_texts(target_model):
+        """把单行模板或多行模板统一整理成去重后的大写字符串列表。"""
+        if isinstance(target_model, (list, tuple, set)):
+            raw_items = target_model
+        else:
+            raw_items = [target_model]
+
+        targets = []
+        for item in raw_items:
+            text = str(item or "").strip()
+            text_up = text.upper()
+            if text_up and text_up not in targets:
+                targets.append(text_up)
+        return targets
+
+    @staticmethod
+    def _recognized_text_candidates(detected_data):
+        """返回高置信度识别文本候选；包含未截断的 items，兼容旧的 texts 字段。"""
+        candidates = []
+        for text in detected_data.get("texts", []) or []:
+            clean = str(text or "").strip().upper()
+            if clean and clean not in candidates:
+                candidates.append(clean)
+
+        for item in detected_data.get("items", []) or []:
+            clean = str(item.get("text", "") or "").strip().upper()
+            if clean and clean not in candidates:
+                candidates.append(clean)
+        return candidates
+
+    @staticmethod
     def analyze_status(detected_data, target_model, target_angle):
         """把 OCR 结果与目标参数比对，输出 UI 用的 (文本, 颜色键)。
 
@@ -47,16 +78,22 @@ class MaterialController:
         if raw_status == "empty_slot":
             return "空槽", "red"
 
-        texts = detected_data.get("texts", [])
+        texts = MaterialController._recognized_text_candidates(detected_data)
         angle = detected_data.get("angle", 0)
 
         # 完全没识别到文字 -> 识别失败
         if not texts:
             return "识别失败", "red"
 
-        target_up = target_model.upper().strip()
-        # 任一候选文本包含目标型号（子串匹配 + 大小写不敏感）
-        model_match = any(target_up in text.upper() for text in texts)
+        targets = MaterialController._normalize_target_texts(target_model)
+        if not targets:
+            return "异常", "red"
+
+        # 多行模板要求每一行都被识别结果覆盖；单行模板保持原来的包含匹配语义。
+        model_match = all(
+            any(target in text for text in texts)
+            for target in targets
+        )
 
         if model_match:
             # 型号对 + 角度对 = 正常；型号对 + 角度错 = 异常

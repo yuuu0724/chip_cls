@@ -1443,13 +1443,14 @@ class OCRApp(QMainWindow):
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 final_model = dialog.get_model_name()
                 final_angle = dialog.get_angle()
+                selected_texts = dialog.get_selected_texts()
                 tray_id = self.tray_combo.currentData()
 
                 if not self.services.template_manager.save_template(
                     final_model,
                     final_angle,
                     image_path=file_path,
-                    ocr_texts=detected_texts,
+                    ocr_texts=selected_texts,
                     tray_id=tray_id,
                     description="用户从图片手动确认的模板",
                 ):
@@ -1473,7 +1474,7 @@ class OCRApp(QMainWindow):
 
                 QMessageBox.information(
                     self, "成功",
-                    f"模板已保存: {final_model} (角度: {final_angle}°)\n\n"
+                    f"模板已保存: {final_model} (角度: {final_angle}°，字符行数: {len(selected_texts)})\n\n"
                     "现在可以使用此模板进行检测。",
                 )
         else:
@@ -1732,6 +1733,28 @@ class OCRApp(QMainWindow):
             return
         self._start_live_worker(tray_id)
 
+    def _current_template_match_texts(self):
+        """返回当前模板用于检测判定的标准字符行，优先使用用户保存的多选行。"""
+        model_name = self.model_input.text().strip()
+        targets = []
+        if model_name:
+            template = self.services.template_manager.get_template(model_name)
+            if template:
+                targets = [
+                    str(text).strip()
+                    for text in template.get("ocrTexts", [])
+                    if str(text).strip()
+                ]
+                if not targets:
+                    fallback = (
+                        template.get("standardChipModel")
+                        or template.get("modelName")
+                        or model_name
+                    )
+                    targets = [str(fallback).strip()] if str(fallback).strip() else []
+
+        return targets or ([model_name] if model_name else [])
+
     def _start_live_worker(self, tray_id):
         """首槽移动到位后启动实时识别线程。"""
         self._active_task_mode = "live"
@@ -1748,7 +1771,7 @@ class OCRApp(QMainWindow):
         self.live_worker = LiveInspectionWorker(
             engine=self.services.engine,
             camera_worker=self.camera_worker,
-            target_m=self.model_input.text(),
+            target_m=self._current_template_match_texts(),
             target_a=self.angle_input.text(),
             data_logger=self.services.data_logger,
             total_slots=len(self.slots),

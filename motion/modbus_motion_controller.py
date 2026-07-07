@@ -100,6 +100,15 @@ def _config_int(value: Any, default: int) -> int:
         return int(default)
 
 
+def _config_optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class ModbusMotionController:
     """通过 Modbus RTU 控制 XYZ 三轴相对运动。"""
 
@@ -112,6 +121,8 @@ class ModbusMotionController:
         parity: str = DEFAULT_PARITY,
         stopbits: int = DEFAULT_STOPBITS,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        post_home_x_position: int | None = None,
+        post_home_y_position: int | None = None,
         post_home_z_position: int = POST_HOME_Z_POSITION,
     ):
         self.port = port or DEFAULT_PORT
@@ -121,7 +132,12 @@ class ModbusMotionController:
         self.parity = parity or DEFAULT_PARITY
         self.stopbits = int(stopbits)
         self.timeout = float(timeout)
-        self.post_home_z_position = _config_int(post_home_z_position, POST_HOME_Z_POSITION)
+        self.post_home_positions = {
+            "z": _config_optional_int(post_home_z_position),
+            "x": _config_optional_int(post_home_x_position),
+            "y": _config_optional_int(post_home_y_position),
+        }
+        self.post_home_z_position = self.post_home_positions["z"]
 
         self.client = None
         self._lock = threading.RLock()
@@ -140,10 +156,9 @@ class ModbusMotionController:
             parity=config.get("modbus_parity", DEFAULT_PARITY),
             stopbits=config.get("modbus_stopbits", DEFAULT_STOPBITS),
             timeout=config.get("modbus_timeout") or config.get("serial_timeout") or DEFAULT_TIMEOUT_SECONDS,
-            post_home_z_position=_config_int(
-                config.get("post_home_z_position"),
-                POST_HOME_Z_POSITION,
-            ),
+            post_home_x_position=config.get("post_home_x_position"),
+            post_home_y_position=config.get("post_home_y_position"),
+            post_home_z_position=config.get("post_home_z_position", POST_HOME_Z_POSITION),
         )
 
     @property
@@ -317,20 +332,53 @@ class ModbusMotionController:
             return MotionCommandResult(False, f"机械回零触发失败：{exc}")
 
         logger.info("机械回零完成，机械零点反馈=%s", self.home_position)
-        post_home_result = self.move_z_to_position(self.post_home_z_position, POST_HOME_Z_SPEED)
+        post_home_result = self._move_to_post_home_positions()
         if not post_home_result.success:
             self.device_initialized = False
             return MotionCommandResult(
                 False,
-                f"机械回零完成，但Z轴移动到 {self.post_home_z_position} 失败：{post_home_result.message}",
+                f"机械回零完成，但移动到回零后初始位置失败：{post_home_result.message}",
                 post_home_result.data,
             )
 
         positions = post_home_result.data.get("position") or dict(self.last_position)
+        moved_axes = post_home_result.data.get("moved_axes", [])
+        if moved_axes:
+            target_text = "，".join(f"{axis.upper()}={target}" for axis, target in moved_axes)
+            message = f"机械回零完成，已移动到回零后初始位置：{target_text}。"
+        else:
+            message = "机械回零完成，未配置回零后初始位置移动。"
         return MotionCommandResult(
             True,
-            f"机械回零完成，Z轴已移动到 {self.post_home_z_position}。",
+            message,
             {"position": positions},
+        )
+
+    def _move_to_post_home_positions(self) -> MotionCommandResult:
+        """按开发者配置移动到机械回零后的初始停靠位置；未配置的轴跳过。"""
+        moved_axes = []
+        positions = dict(self.last_position)
+        for axis in ("z", "x", "y"):
+            target_position = self.post_home_positions.get(axis)
+            if target_position is None:
+                continue
+            result = self.move_axis_to_position(
+                axis,
+                target_position,
+                POST_HOME_Z_SPEED,
+            )
+            if not result.success:
+                return MotionCommandResult(
+                    False,
+                    f"{axis.upper()}轴移动到 {target_position} 失败：{result.message}",
+                    result.data,
+                )
+            positions = result.data.get("position") or positions
+            moved_axes.append((axis, target_position))
+        return MotionCommandResult(
+            True,
+            "回零后初始位置移动完成。",
+            {"position": positions, "moved_axes": moved_axes},
         )
 
     def _wait_until_positions_stable(
@@ -478,14 +526,19 @@ class ModbusMotionController:
     def move_z_pulses(self, pulses, speed, tolerance=5, timeout=20):
         return self.move_axis_pulses("z", pulses, speed, tolerance, timeout)
 
+    def move_axis_to_position(self, axis: str, target_position, speed, tolerance=5, timeout=20):
+        """把指定轴移动到开发者配置的累计脉冲位置。"""
+        axis_key = self._normalize_axis(axis)
+        try:
+            current_position = self.get_axis_position(axis_key)
+            delta = int(round(float(target_position))) - int(current_position)
+        except Exception as exc:
+            return MotionCommandResult(False, f"读取{axis_key.upper()}轴当前位置失败：{exc}")
+        return self.move_axis_pulses(axis_key, delta, speed, tolerance, timeout)
+
     def move_z_to_position(self, target_position, speed, tolerance=5, timeout=20):
         """把 Z 轴移动到指定累计脉冲位置。"""
-        try:
-            current_z = self.get_axis_position("z")
-            delta = int(round(float(target_position))) - int(current_z)
-        except Exception as exc:
-            return MotionCommandResult(False, f"读取Z轴当前位置失败：{exc}")
-        return self.move_z_pulses(delta, speed, tolerance, timeout)
+        return self.move_axis_to_position("z", target_position, speed, tolerance, timeout)
 
     def move_axis_mm(self, axis: str, distance_mm: float, speed: int, tolerance=5, timeout=20):
         axis_key = self._normalize_axis(axis)
