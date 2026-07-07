@@ -339,6 +339,44 @@ LIVE_BUTTON = """
     }
 """
 
+# 暂停/继续检测（橙色）
+PAUSE_BUTTON = """
+    QPushButton {
+        background-color: rgba(255, 149, 0, 0.30);
+        color: #ffffff;
+        border: 1px solid rgba(255, 149, 0, 0.85);
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    QPushButton:hover { background-color: rgba(255, 149, 0, 0.42); }
+    QPushButton:pressed { background-color: rgba(210, 120, 0, 0.55); }
+    QPushButton:disabled {
+        background-color: rgba(90, 90, 95, 0.45);
+        color: #8e8e93;
+        border: 1px solid rgba(120, 120, 125, 0.45);
+    }
+"""
+
+# 结束检测（红色）
+STOP_BUTTON = """
+    QPushButton {
+        background-color: rgba(255, 59, 48, 0.28);
+        color: #ffffff;
+        border: 1px solid rgba(255, 69, 58, 0.90);
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    QPushButton:hover { background-color: rgba(255, 69, 58, 0.40); }
+    QPushButton:pressed { background-color: rgba(180, 35, 28, 0.58); }
+    QPushButton:disabled {
+        background-color: rgba(90, 90, 95, 0.45);
+        color: #8e8e93;
+        border: 1px solid rgba(120, 120, 125, 0.45);
+    }
+"""
+
 # 实时识别模式下拉（复用 TRAY_COMBO 的风格，但宽度更窄）
 LIVE_MODE_COMBO = """
     QComboBox {

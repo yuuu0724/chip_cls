@@ -7,6 +7,7 @@
 
 import logging
 import os
+import threading
 import time
 
 import cv2
@@ -70,6 +71,33 @@ class ControlWorker(QThread):
         self.total_slots = total_slots
         self.grayscale_enabled = bool(grayscale_enabled)
         self.binary_enabled = bool(binary_enabled)
+        self._stop_requested = False
+        self._pause_requested = threading.Event()
+        self.was_stopped = False
+
+    def stop(self):
+        """请求终止批量检测。
+
+        已经进入 OCR 推理的单张图片不能被强制打断，会在当前推理返回后停止。
+        """
+        self._stop_requested = True
+        self.was_stopped = True
+        self._pause_requested.clear()
+
+    def pause(self):
+        """暂停后续槽位检测。"""
+        if not self._stop_requested:
+            self._pause_requested.set()
+
+    def resume(self):
+        """继续执行暂停中的检测。"""
+        self._pause_requested.clear()
+
+    def _wait_if_paused(self):
+        """暂停时短轮询等待，确保 stop() 能快速唤醒线程退出。"""
+        while self._pause_requested.is_set() and not self._stop_requested:
+            self.msleep(100)
+        return not self._stop_requested
 
     @staticmethod
     def _to_gray_bgr(image):
@@ -125,6 +153,8 @@ class ControlWorker(QThread):
         """
         images = {}
         for file_name in files:
+            if self._stop_requested or not self._wait_if_paused():
+                break
             path = os.path.join(self.img_dir, file_name)
             img = cv2.imread(path)
             if img is not None:
@@ -189,6 +219,9 @@ class ControlWorker(QThread):
                     len(preloaded), time.time() - preload_start)
 
         for index in range(self.total_slots):
+            if self._stop_requested or not self._wait_if_paused():
+                break
+
             if index < len(files) and files[index] in preloaded:
                 infer_start = time.time()
                 image = preloaded[files[index]]
@@ -203,8 +236,14 @@ class ControlWorker(QThread):
                 logger.warning("槽位 %02d 未找到对应图片，按识别失败处理", index + 1)
                 result = {"texts": [], "angle": 0, "status": "missing"}
 
+            if self._stop_requested:
+                break
             self._emit_result(index, result)
 
-        logger.info("========== 检测完成, 总耗时 %.2fs ==========",
-                    time.time() - batch_start)
+        if self._stop_requested:
+            logger.info("========== 检测已终止, 总耗时 %.2fs ==========",
+                        time.time() - batch_start)
+        else:
+            logger.info("========== 检测完成, 总耗时 %.2fs ==========",
+                        time.time() - batch_start)
         self.finished.emit()

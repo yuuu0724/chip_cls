@@ -139,6 +139,11 @@ class OCRApp(QMainWindow):
         self.origin_center_tolerance_px = float(app_config.get("origin_center_tolerance_px", 15.0))
         self.origin_center_x_pulses_per_px = float(app_config.get("origin_center_x_pulses_per_px", 25.0))
         self.origin_center_y_pulses_per_px = float(app_config.get("origin_center_y_pulses_per_px", 12.5))
+        self._active_task_mode = None
+        self._task_stop_requested = False
+        self._task_paused = False
+        self._pending_return_to_first_slot = False
+        self._return_to_first_slot_callback = None
 
         self.init_ui()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -346,6 +351,25 @@ class OCRApp(QMainWindow):
         self.start_btn.setStyleSheet(S.START_BUTTON)
         self.start_btn.clicked.connect(self.start_live_inspection)
         button_section_layout.addWidget(self.start_btn)
+
+        run_control_row = QHBoxLayout()
+        run_control_row.setSpacing(5)
+
+        self.pause_btn = QPushButton("暂停检测")
+        self.pause_btn.setMinimumHeight(36)
+        self.pause_btn.setStyleSheet(S.PAUSE_BUTTON)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.clicked.connect(self.toggle_pause_current_task)
+        run_control_row.addWidget(self.pause_btn)
+
+        self.stop_btn = QPushButton("结束检测")
+        self.stop_btn.setMinimumHeight(36)
+        self.stop_btn.setStyleSheet(S.STOP_BUTTON)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_current_task)
+        run_control_row.addWidget(self.stop_btn)
+
+        button_section_layout.addLayout(run_control_row)
 
         # 刷新：重置所有槽位到"待机"
         bottom_action_row = QHBoxLayout()
@@ -701,7 +725,15 @@ class OCRApp(QMainWindow):
                 return False
         return True
 
-    def _run_motion_task(self, title, task, on_success=None, on_failure=None, show_success=True):
+    def _run_motion_task(
+        self,
+        title,
+        task,
+        on_success=None,
+        on_failure=None,
+        show_success=True,
+        modal=True,
+    ):
         """在后台线程执行运动控制任务，并把结果回到主线程处理。"""
         if self.motion_worker is not None and self.motion_worker.isRunning():
             QMessageBox.warning(self, "运动任务进行中", "请等待当前运动任务完成后再操作。")
@@ -710,7 +742,9 @@ class OCRApp(QMainWindow):
         progress = QProgressDialog(title, "", 0, 0, self)
         progress.setWindowTitle("运动控制")
         progress.setCancelButton(None)
-        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setWindowModality(
+            Qt.WindowModality.ApplicationModal if modal else Qt.WindowModality.NonModal
+        )
         progress.show()
 
         worker = MotionTaskWorker(task, self)
@@ -729,12 +763,116 @@ class OCRApp(QMainWindow):
                     on_failure(result)
                 else:
                     QMessageBox.warning(self, "运动失败", result.message)
+            if self._pending_return_to_first_slot:
+                self._start_return_to_first_slot()
 
         worker.finished.connect(handle_finished)
         worker.start()
 
     def _motion_speed(self):
         return 1000
+
+    def _set_task_controls_running(self, pause_enabled=True):
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.pause_btn.setEnabled(pause_enabled)
+        self.pause_btn.setText("继续检测" if self._task_paused else "暂停检测")
+
+    def _set_task_controls_idle(self):
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("暂停检测")
+        self._task_paused = False
+
+    def _is_live_running(self):
+        return self.live_worker is not None and self.live_worker.isRunning()
+
+    def toggle_pause_current_task(self):
+        """暂停或继续当前检测任务。"""
+        if self._active_task_mode == "live" and self._is_live_running():
+            target = self.live_worker
+        else:
+            return
+
+        if self._task_paused:
+            target.resume()
+            self._task_paused = False
+            self.pause_btn.setText("暂停检测")
+            self.statusBar().showMessage("检测已继续。", 3000)
+        else:
+            target.pause()
+            self._task_paused = True
+            self.pause_btn.setText("继续检测")
+            self.statusBar().showMessage("检测已暂停。", 3000)
+
+    def stop_current_task(self):
+        """终止当前检测任务，并在可执行时返回槽位 1。"""
+        if self._active_task_mode is None and not self._is_live_running():
+            return
+
+        self._task_stop_requested = True
+        self._task_paused = False
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("暂停检测")
+        self.stop_btn.setEnabled(False)
+        self.statusBar().showMessage("正在结束检测任务...", 3000)
+
+        if self._is_live_running():
+            self.live_worker.stop()
+        elif self._active_task_mode == "live_starting":
+            self._request_return_to_first_slot(self._finish_stopped_task_after_return)
+
+    def _request_return_to_first_slot(self, callback=None):
+        """请求设备回到第一个槽位；若运动中则排队到当前运动结束后执行。"""
+        if callback is not None:
+            self._return_to_first_slot_callback = callback
+        self._pending_return_to_first_slot = True
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            self.statusBar().showMessage("当前运动完成后将返回槽位 1。", 3000)
+            return
+        self._start_return_to_first_slot()
+
+    def _start_return_to_first_slot(self):
+        self._pending_return_to_first_slot = False
+        callback = self._return_to_first_slot_callback
+
+        def finish(success, message):
+            self._return_to_first_slot_callback = None
+            if callback is not None:
+                callback(success, message)
+
+        if not self.device_controller.is_initialized:
+            finish(False, "设备尚未复位，无法自动返回槽位 1。")
+            return
+
+        tray_id = self.tray_combo.currentData()
+        try:
+            first_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
+        except ValueError as exc:
+            finish(False, str(exc))
+            return
+
+        self._run_motion_task(
+            "正在返回槽位 1...",
+            lambda: self.device_controller.move_to_coordinate(
+                first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
+            ),
+            on_success=lambda result: finish(True, result.message),
+            on_failure=lambda result: finish(False, result.message),
+            show_success=False,
+            modal=False,
+        )
+
+    def _finish_stopped_task_after_return(self, success, message):
+        self._active_task_mode = None
+        self._task_stop_requested = False
+        self._set_task_controls_idle()
+        if success:
+            QMessageBox.information(self, "已结束", "检测任务已结束，并已返回槽位 1。")
+        else:
+            QMessageBox.warning(self, "已结束", f"检测任务已结束，但返回槽位 1 失败：{message}")
+        self.setFocus()
 
     def move_to_slot(self, slot_index):
         """点击槽位后，按料盘几何参数计算坐标并确认移动。"""
@@ -1160,8 +1298,9 @@ class OCRApp(QMainWindow):
         之所以加实时识别忙碌检查，是因为识别中途复位会和后台线程竞争
         UI 更新（见 `update_slot_ui`）。
         """
-        if self.live_worker is not None and self.live_worker.isRunning():
-            QMessageBox.warning(self, "提示", "实时识别进行中，请结束后再刷新。")
+        if (self.live_worker is not None and self.live_worker.isRunning()) or \
+                (self.motion_worker is not None and self.motion_worker.isRunning()):
+            QMessageBox.warning(self, "提示", "任务进行中，请结束后再刷新。")
             return
         for slot in self.slots:
             slot.reset()
@@ -1372,19 +1511,31 @@ class OCRApp(QMainWindow):
             QMessageBox.warning(self, "坐标计算失败", str(exc))
             return
 
-        self.start_btn.setEnabled(False)
+        self._active_task_mode = "live_starting"
+        self._task_stop_requested = False
+        self._task_paused = False
+        self._set_task_controls_running(pause_enabled=False)
         self._run_motion_task(
             "正在移动到槽位 1...",
             lambda: self.device_controller.move_to_coordinate(
                 first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
             ),
-            on_success=lambda _result: self._start_live_worker(tray_id),
+            on_success=lambda _result: self._on_live_start_motion_done(tray_id),
             on_failure=self._on_live_start_motion_failed,
             show_success=False,
+            modal=False,
         )
+
+    def _on_live_start_motion_done(self, tray_id):
+        if self._task_stop_requested:
+            self._request_return_to_first_slot(self._finish_stopped_task_after_return)
+            return
+        self._start_live_worker(tray_id)
 
     def _start_live_worker(self, tray_id):
         """首槽移动到位后启动实时识别线程。"""
+        self._active_task_mode = "live"
+        self._set_task_controls_running(pause_enabled=True)
         self.services.data_logger.start_new_batch(
             tray_id, expected_slots=len(self.slots),
         )
@@ -1407,7 +1558,9 @@ class OCRApp(QMainWindow):
         self.live_worker.start()
 
     def _on_live_start_motion_failed(self, result):
-        self.start_btn.setEnabled(True)
+        self._active_task_mode = None
+        self._task_stop_requested = False
+        self._set_task_controls_idle()
         QMessageBox.warning(self, "实时识别启动失败", result.message)
 
     def on_live_request_move_confirm(self, next_slot_index):
@@ -1423,10 +1576,13 @@ class OCRApp(QMainWindow):
             coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, next_slot_index)
         except ValueError as exc:
             QMessageBox.warning(self, "自动移槽失败", str(exc))
-            self.live_worker.stop()
+            if self.live_worker is not None:
+                self.live_worker.stop()
             return
 
         def after_move(_result):
+            if self._task_stop_requested:
+                return
             if self.live_worker is not None:
                 self.live_worker.confirm_move()
 
@@ -1438,6 +1594,7 @@ class OCRApp(QMainWindow):
             on_success=after_move,
             on_failure=self._on_live_move_failed,
             show_success=False,
+            modal=False,
         )
 
     def _on_live_move_failed(self, result):
@@ -1450,35 +1607,24 @@ class OCRApp(QMainWindow):
 
         保存截图、返回料盘原点、恢复按钮并弹提示。
         """
+        stopped = self._task_stop_requested or bool(getattr(self.live_worker, "was_stopped", False))
         self.live_worker = None
-        self.services.data_logger.save_ui_screenshot(self)
-        tray_id = self.tray_combo.currentData()
-        try:
-            origin_coord = self.services.tray_manager.calculate_slot_coordinate(tray_id, 0)
-        except ValueError as exc:
-            self.start_btn.setEnabled(True)
-            QMessageBox.warning(self, "回原点失败", str(exc))
-            self.setFocus()
+
+        if stopped:
+            self._request_return_to_first_slot(self._finish_stopped_task_after_return)
             return
 
-        self._run_motion_task(
-            "识别完成，正在返回料盘原点...",
-            lambda: self.device_controller.move_to_coordinate(
-                origin_coord["x"], origin_coord["y"], origin_coord["z"], self._motion_speed()
-            ),
-            on_success=self._on_live_return_origin_done,
-            on_failure=self._on_live_return_origin_failed,
-            show_success=False,
-        )
+        self.services.data_logger.save_ui_screenshot(self)
+        self._request_return_to_first_slot(self._finish_live_completed_after_return)
 
-    def _on_live_return_origin_done(self, _result):
-        self.start_btn.setEnabled(True)
-        QMessageBox.information(self, "完成", "实时识别已完成，并已返回料盘原点。")
-        self.setFocus()
-
-    def _on_live_return_origin_failed(self, result):
-        self.start_btn.setEnabled(True)
-        QMessageBox.warning(self, "回原点失败", f"实时识别已完成，但返回料盘原点失败：{result.message}")
+    def _finish_live_completed_after_return(self, success, message):
+        self._active_task_mode = None
+        self._task_stop_requested = False
+        self._set_task_controls_idle()
+        if success:
+            QMessageBox.information(self, "完成", "实时识别已完成，并已返回槽位 1。")
+        else:
+            QMessageBox.warning(self, "回槽位 1 失败", f"实时识别已完成，但返回槽位 1 失败：{message}")
         self.setFocus()
 
     def keyPressEvent(self, event):
@@ -1494,6 +1640,8 @@ class OCRApp(QMainWindow):
         if self.live_worker is not None and self.live_worker.isRunning():
             self.live_worker.stop()
             self.live_worker.wait()
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            self.motion_worker.wait()
         if self.chip_preview_worker is not None and self.chip_preview_worker.isRunning():
             self.chip_preview_worker.wait()
         if self.camera_worker:

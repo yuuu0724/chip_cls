@@ -95,6 +95,8 @@ class LiveInspectionWorker(QThread):
 
         # 停止标志；外部调用 stop() 后置 True
         self._stop_flag = False
+        self._pause_requested = threading.Event()
+        self.was_stopped = False
         # 槽位移动确认事件；工人点"确认"或 UI 自动移槽完成后 set()
         self._move_confirmed = threading.Event()
 
@@ -109,7 +111,18 @@ class LiveInspectionWorker(QThread):
         不至于永远阻塞。
         """
         self._stop_flag = True
+        self.was_stopped = True
+        self._pause_requested.clear()
         self._move_confirmed.set()
+
+    def pause(self):
+        """暂停后续采集和识别。"""
+        if not self._stop_flag:
+            self._pause_requested.set()
+
+    def resume(self):
+        """继续执行暂停中的实时识别。"""
+        self._pause_requested.clear()
 
     def confirm_move(self):
         """主线程回调：工人已确认摄像头移到位，解除 wait() 阻塞继续识别。
@@ -117,6 +130,13 @@ class LiveInspectionWorker(QThread):
         必须在主线程调用（由主线程的信号槽或按钮事件触发）。
         """
         self._move_confirmed.set()
+
+    def _wait_if_paused(self):
+        """暂停时短轮询等待，确保 stop() 能快速唤醒线程退出。"""
+        while self._pause_requested.is_set() and not self._stop_flag:
+            self.status_message.emit("检测已暂停，等待继续...")
+            self.msleep(100)
+        return not self._stop_flag
 
     # ------------------------------------------------------------------
     # 内部推理逻辑
@@ -181,12 +201,12 @@ class LiveInspectionWorker(QThread):
         last_results = []
 
         for attempt in range(_MAX_RETRY_ROUNDS):
-            if self._stop_flag:
+            if self._stop_flag or not self._wait_if_paused():
                 break
 
             round_results = []
             for frame_idx in range(3):
-                if self._stop_flag:
+                if self._stop_flag or not self._wait_if_paused():
                     break
                 self.status_message.emit(
                     f"槽位 {slot_index + 1} — 第 {attempt + 1} 轮第 {frame_idx + 1} 帧采集中..."
@@ -194,7 +214,13 @@ class LiveInspectionWorker(QThread):
                 status, color, result = self._capture_and_infer()
                 round_results.append((status, color, result))
                 # 帧间间隔，合计约 1 秒
-                self.msleep(_FRAME_INTERVAL_MS)
+                waited_ms = 0
+                while waited_ms < _FRAME_INTERVAL_MS and not self._stop_flag:
+                    if not self._wait_if_paused():
+                        break
+                    step_ms = min(100, _FRAME_INTERVAL_MS - waited_ms)
+                    self.msleep(step_ms)
+                    waited_ms += step_ms
 
             if len(round_results) < 3:
                 # 被 stop 打断，不再重试
@@ -236,7 +262,7 @@ class LiveInspectionWorker(QThread):
                     self.total_slots, self.mode)
 
         for slot_index in range(self.total_slots):
-            if self._stop_flag:
+            if self._stop_flag or not self._wait_if_paused():
                 break
 
             # 非首个槽位：等待 UI 自动移动到新槽位并确认
@@ -244,9 +270,11 @@ class LiveInspectionWorker(QThread):
                 self._move_confirmed.clear()
                 self.request_move_confirm.emit(slot_index)
                 # UI 自动移槽完成后调用 confirm_move()
-                self._move_confirmed.wait()
+                while not self._move_confirmed.wait(0.1):
+                    if self._stop_flag:
+                        break
 
-                if self._stop_flag:
+                if self._stop_flag or not self._wait_if_paused():
                     break
 
             self.status_message.emit(f"正在识别槽位 {slot_index + 1}...")
