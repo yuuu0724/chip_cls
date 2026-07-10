@@ -12,9 +12,10 @@
 import os
 import sys
 import time
+import logging
 
 import cv2
-from motion import pulses_to_mm
+from motion import ConfigurableLightController, pulses_to_mm
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -48,6 +50,8 @@ from .dialogs import (
     TemplateConfirmDialog,
 )
 from .material_slot import MaterialSlot
+
+logger = logging.getLogger(__name__)
 
 
 class MotionTaskWorker(QThread):
@@ -126,6 +130,12 @@ class OCRApp(QMainWindow):
                 self.services.config_manager.get_config()
             )
         self.device_controller = self.services.device_controller
+        if getattr(self.services, "light_controller", None) is None:
+            self.services.light_controller = ConfigurableLightController(
+                motion_controller=self.device_controller,
+                config=self.services.config_manager.get_config(),
+            )
+        self.light_controller = self.services.light_controller
 
         # UI 相关状态
         self.camera_worker = None   # 摄像头预览线程（懒启动）
@@ -147,6 +157,11 @@ class OCRApp(QMainWindow):
         self._current_slot_order = []
         self._pending_return_to_first_slot = False
         self._return_to_first_slot_callback = None
+        self._skip_next_tray_origin_move = False
+        self._red_light_flash_on = False
+        self.red_light_timer = QTimer(self)
+        self.red_light_timer.timeout.connect(self._toggle_red_light_flash)
+        self._set_red_light(False)
 
         self.init_ui()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -427,6 +442,46 @@ class OCRApp(QMainWindow):
         angle_edit_layout.addWidget(self.angle_input)
         param_section_layout.addLayout(angle_edit_layout)
 
+        speeds = self._motion_speeds()
+        self.motion_speed_spins = {}
+        for axis in ("x", "y", "z"):
+            speed_edit_layout = QHBoxLayout()
+            speed_edit_layout.setSpacing(5)
+            speed_label = QLabel(f"{axis.upper()}速度:")
+            speed_label.setStyleSheet(S.PARAM_LABEL)
+            speed_edit_layout.addWidget(speed_label)
+
+            speed_spin = QSpinBox()
+            speed_spin.setRange(1, 999999)
+            speed_spin.setValue(speeds[axis])
+            speed_spin.setSingleStep(100)
+            speed_spin.setSuffix(" pulse/s")
+            speed_spin.setMinimumHeight(32)
+            speed_spin.setStyleSheet(
+                """
+                QSpinBox {
+                    color: #ffffff;
+                    background-color: #2a2a2e;
+                    border: 1px solid #007AFF;
+                    border-radius: 8px;
+                    padding: 5px 9px;
+                    font-size: 13px;
+                    font-weight: 500;
+                    selection-background-color: #007AFF;
+                }
+                QSpinBox:focus {
+                    border: 2px solid #007AFF;
+                    padding: 4px 8px;
+                }
+                """
+            )
+            speed_spin.valueChanged.connect(
+                lambda value, axis_key=axis: self._save_axis_motion_speed_config(axis_key, value)
+            )
+            self.motion_speed_spins[axis] = speed_spin
+            speed_edit_layout.addWidget(speed_spin)
+            param_section_layout.addLayout(speed_edit_layout)
+
         right_layout.addWidget(param_section, 2)
         
         # ---------- 区域 3：任务控制 ----------
@@ -525,6 +580,9 @@ class OCRApp(QMainWindow):
 
         rows, cols = self.services.tray_manager.get_tray_dimensions(tray_id)
         self._rebuild_grid(rows, cols)
+        if self._skip_next_tray_origin_move:
+            self._skip_next_tray_origin_move = False
+            return
         self._move_to_current_tray_origin()
 
     def _move_to_current_tray_origin(self):
@@ -544,9 +602,7 @@ class OCRApp(QMainWindow):
 
         self._run_motion_task(
             f"正在移动到料盘 {tray_id} 原点...",
-            lambda: self.device_controller.move_to_coordinate(
-                origin_coord["x"], origin_coord["y"], origin_coord["z"], self._motion_speed()
-            ),
+            lambda: self._move_to_coordinate(origin_coord["x"], origin_coord["y"], origin_coord["z"]),
             show_success=False,
         )
 
@@ -568,22 +624,20 @@ class OCRApp(QMainWindow):
         for i in range(total):
             slot = MaterialSlot(i + 1, display_index=self._display_slot_number(i))
             slot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            slot.clicked.connect(self.move_to_slot)
-            self.grid_layout.addWidget(slot, i // self._grid_cols, i % self._grid_cols)
+            ui_row = i // self._grid_cols
+            ui_col = i % self._grid_cols
+            grid_row = self._grid_rows - 1 - ui_row
+            self.grid_layout.addWidget(slot, grid_row, ui_col)
             self.slots.append(slot)
         QTimer.singleShot(0, self._update_slot_sizes)
 
     def _display_slot_number(self, slot_index):
-        """把物理槽位索引转换成当前检测顺序下的显示编号。"""
-        cols = max(1, int(getattr(self, "_grid_cols", 1)))
-        rows = max(1, int(getattr(self, "_grid_rows", 1)))
+        """按自然顺序显示槽位编号：第1行第1个为 1。"""
         try:
             index = int(slot_index)
         except (TypeError, ValueError):
             return 1
-        row = max(0, min(rows - 1, index // cols))
-        col = max(0, min(cols - 1, index % cols))
-        return (rows - 1 - row) * cols + col + 1
+        return index + 1
 
     def _update_slot_sizes(self):
         """根据料盘区域可用空间自适应计算槽位尺寸。
@@ -622,39 +676,21 @@ class OCRApp(QMainWindow):
 
         用户点击确认后：
         1. 以用户输入的料盘名称作为唯一 key 写入配置
-        2. 追加到下拉末尾并切换过去（触发 `on_tray_changed` 重建网格）
+        2. 追加到下拉末尾并切换过去（只重建网格，不移动设备）
         """
         if self.motion_worker is not None and self.motion_worker.isRunning():
             QMessageBox.warning(self, "提示", "运动任务进行中，请等待完成后再新增料盘。")
             return
 
-        reply = QMessageBox.question(
-            self,
-            "新增料盘",
-            "新增料盘前是否先执行机械复位？\n\n"
-            "选择“否”将直接打开新增料盘窗口，可手动填写原点坐标。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Cancel:
-            return
-        if reply == QMessageBox.StandardButton.No:
-            self._open_add_tray_dialog()
-            return
-
-        self._run_motion_task(
-            "正在回到机械原点...",
-            self.device_controller.home,
-            on_success=lambda _result: self._open_add_tray_dialog(),
-            show_success=False,
-        )
+        self._open_add_tray_dialog()
 
     def _open_add_tray_dialog(self):
-        """机械回零完成后打开新增料盘弹窗。"""
+        """打开新增料盘弹窗，使用当前坐标作为新料盘原点。"""
         dialog = AddTrayDialog(
             self.services.tray_manager.get_tray_list(),
             coordinate_provider=self._read_current_position_for_dialog,
             center_status_provider=self.get_origin_center_status,
+            jog_speed=self._motion_speeds(),
             parent=self,
         )
         dialog.jog_requested.connect(lambda axis, pulses, speed: self._jog_axis_for_tray_dialog(dialog, axis, pulses, speed))
@@ -682,6 +718,7 @@ class OCRApp(QMainWindow):
             origin_z=tray_data["origin_z"],
         )
 
+        self._skip_next_tray_origin_move = True
         self.tray_combo.addItem(tray_name, tray_id)
         self.tray_combo.setCurrentIndex(self.tray_combo.count() - 1)
         QMessageBox.information(self, "新增成功", f"料盘 {tray_name} 已新增。")
@@ -700,6 +737,7 @@ class OCRApp(QMainWindow):
             self.services.tray_manager.get_tray_list(),
             coordinate_provider=self._read_current_position_for_dialog,
             center_status_provider=self.get_origin_center_status,
+            jog_speed=self._motion_speeds(),
             parent=self,
             initial_data={"tray_id": tray_id, **tray_info},
             edit_mode=True,
@@ -735,6 +773,7 @@ class OCRApp(QMainWindow):
         index = self.tray_combo.currentIndex()
         self.tray_combo.setItemText(index, new_tray_id)
         self.tray_combo.setItemData(index, new_tray_id)
+        self._skip_next_tray_origin_move = True
         self.on_tray_changed()
         QMessageBox.information(self, "保存成功", f"料盘 {new_tray_id} 已更新。")
 
@@ -825,6 +864,12 @@ class OCRApp(QMainWindow):
         return self.device_controller.home()
 
     def _on_motion_ready(self, result):
+        if self.light_controller is not None:
+            self.light_controller.reload_config(self.services.config_manager.get_config())
+            try:
+                self.light_controller.apply_initial_state()
+            except Exception:
+                logger.exception("应用灯光初始状态失败")
         self.centralWidget().setEnabled(True)
         self.statusBar().showMessage(result.message, 3000)
 
@@ -926,7 +971,74 @@ class OCRApp(QMainWindow):
         worker.start()
 
     def _motion_speed(self):
-        return 1000
+        return self._motion_speeds()["x"]
+
+    def _motion_speeds(self):
+        config = self.services.config_manager.get_config()
+        try:
+            fallback_speed = int(config.get("motion_speed", 1000))
+        except (TypeError, ValueError):
+            fallback_speed = 1000
+
+        speeds = {}
+        for axis in ("x", "y", "z"):
+            try:
+                speed = int(config.get(f"motion_speed_{axis}", fallback_speed))
+            except (TypeError, ValueError):
+                speed = fallback_speed
+            speeds[axis] = max(1, speed)
+        return speeds
+
+    def _move_to_coordinate(self, x, y, z):
+        return self.device_controller.move_to_coordinate_with_axis_speeds(
+            x,
+            y,
+            z,
+            self._motion_speeds(),
+        )
+
+    def _save_motion_speed_config(self, value):
+        speed = max(1, int(value))
+        self.services.config_manager.set_motion_config(motion_speed=speed)
+
+    def _save_axis_motion_speed_config(self, axis, value):
+        axis_key = str(axis).lower()
+        if axis_key not in {"x", "y", "z"}:
+            return
+        speed = max(1, int(value))
+        self.services.config_manager.set_motion_config(**{f"motion_speed_{axis_key}": speed})
+
+    def _red_light_flash_interval_ms(self):
+        config = self.services.config_manager.get_config()
+        try:
+            interval = int(config.get("red_light_flash_interval_ms", 500))
+        except (TypeError, ValueError):
+            interval = 500
+        return max(100, interval)
+
+    def _set_red_light(self, on):
+        if self.light_controller is None:
+            return
+        try:
+            self.light_controller.set_red_light(bool(on))
+        except Exception:
+            logger.exception("设置红灯状态失败")
+
+    def _start_red_light_flash(self):
+        if self.light_controller is not None:
+            self.light_controller.reload_config(self.services.config_manager.get_config())
+        self._red_light_flash_on = False
+        self._set_red_light(False)
+        self.red_light_timer.start(self._red_light_flash_interval_ms())
+
+    def _stop_red_light_flash(self):
+        self.red_light_timer.stop()
+        self._red_light_flash_on = False
+        self._set_red_light(False)
+
+    def _toggle_red_light_flash(self):
+        self._red_light_flash_on = not self._red_light_flash_on
+        self._set_red_light(self._red_light_flash_on)
 
     def _set_task_controls_running(self, pause_enabled=True):
         self.start_btn.setEnabled(False)
@@ -945,15 +1057,11 @@ class OCRApp(QMainWindow):
         return self.live_worker is not None and self.live_worker.isRunning()
 
     @staticmethod
-    def _build_bottom_to_top_slot_order(rows, cols):
-        """生成从下到上、每行从左到右的 0 基准槽位顺序。"""
+    def _build_natural_slot_order(rows, cols):
+        """生成从第1行到最后一行、每行从左到右的 0 基准槽位顺序。"""
         rows = int(rows)
         cols = int(cols)
-        return [
-            row * cols + col
-            for row in range(rows - 1, -1, -1)
-            for col in range(cols)
-        ]
+        return list(range(max(0, rows * cols)))
 
     def _first_detection_slot_index(self):
         if self._current_slot_order:
@@ -982,11 +1090,13 @@ class OCRApp(QMainWindow):
         if self._task_paused:
             target.resume()
             self._task_paused = False
+            self._start_red_light_flash()
             self.pause_btn.setText("暂停检测")
             self.statusBar().showMessage("检测已继续。", 3000)
         else:
             target.pause()
             self._task_paused = True
+            self._stop_red_light_flash()
             self.pause_btn.setText("继续检测")
             self.statusBar().showMessage("检测已暂停。", 3000)
 
@@ -1001,6 +1111,7 @@ class OCRApp(QMainWindow):
         self.pause_btn.setText("暂停检测")
         self.stop_btn.setEnabled(False)
         self.statusBar().showMessage("正在结束检测任务...", 3000)
+        self._stop_red_light_flash()
 
         if self._is_live_running():
             self.live_worker.stop()
@@ -1042,9 +1153,7 @@ class OCRApp(QMainWindow):
         slot_no = self._display_slot_number(slot_index)
         self._run_motion_task(
             f"正在返回槽位 {slot_no}...",
-            lambda: self.device_controller.move_to_coordinate(
-                first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
-            ),
+            lambda: self._move_to_coordinate(first_coord["x"], first_coord["y"], first_coord["z"]),
             on_success=lambda result: finish(True, result.message),
             on_failure=lambda result: finish(False, result.message),
             show_success=False,
@@ -1087,9 +1196,7 @@ class OCRApp(QMainWindow):
 
         self._run_motion_task(
             f"正在移动到槽位 {slot_no}...",
-            lambda: self.device_controller.move_to_coordinate(
-                coord["x"], coord["y"], coord["z"], self._motion_speed()
-            ),
+            lambda: self._move_to_coordinate(coord["x"], coord["y"], coord["z"]),
         )
 
     def _read_current_position_for_dialog(self):
@@ -1699,7 +1806,7 @@ class OCRApp(QMainWindow):
 
         tray_id = self.tray_combo.currentData()
         rows, cols = self.services.tray_manager.get_tray_dimensions(tray_id)
-        slot_order = self._build_bottom_to_top_slot_order(rows, cols)
+        slot_order = self._build_natural_slot_order(rows, cols)
         if not slot_order:
             QMessageBox.warning(self, "提示", "当前料盘没有可检测槽位。")
             return
@@ -1718,9 +1825,7 @@ class OCRApp(QMainWindow):
         first_slot_no = self._display_slot_number(first_slot_index)
         self._run_motion_task(
             f"正在移动到槽位 {first_slot_no}...",
-            lambda: self.device_controller.move_to_coordinate(
-                first_coord["x"], first_coord["y"], first_coord["z"], self._motion_speed()
-            ),
+            lambda: self._move_to_coordinate(first_coord["x"], first_coord["y"], first_coord["z"]),
             on_success=lambda _result: self._on_live_start_motion_done(tray_id),
             on_failure=self._on_live_start_motion_failed,
             show_success=False,
@@ -1768,6 +1873,7 @@ class OCRApp(QMainWindow):
         for slot in self.slots:
             slot.reset()
 
+        app_config = self.services.config_manager.get_config()
         self.live_worker = LiveInspectionWorker(
             engine=self.services.engine,
             camera_worker=self.camera_worker,
@@ -1776,14 +1882,18 @@ class OCRApp(QMainWindow):
             data_logger=self.services.data_logger,
             total_slots=len(self.slots),
             slot_order=self._current_slot_order,
+            min_retry_rounds=app_config.get("live_min_retry_rounds", 3),
+            max_retry_rounds=app_config.get("live_max_retry_rounds", 6),
             mode="auto",
         )
         self.live_worker.slot_recognized.connect(self.update_slot_ui)
         self.live_worker.request_move_confirm.connect(self.on_live_request_move_confirm)
         self.live_worker.all_done.connect(self.on_live_all_done)
         self.live_worker.start()
+        self._start_red_light_flash()
 
     def _on_live_start_motion_failed(self, result):
+        self._stop_red_light_flash()
         self._active_task_mode = None
         self._task_stop_requested = False
         self._set_task_controls_idle()
@@ -1814,9 +1924,7 @@ class OCRApp(QMainWindow):
 
         self._run_motion_task(
             f"自动移动到槽位 {self._display_slot_number(next_slot_index)}...",
-            lambda: self.device_controller.move_to_coordinate(
-                coord["x"], coord["y"], coord["z"], self._motion_speed()
-            ),
+            lambda: self._move_to_coordinate(coord["x"], coord["y"], coord["z"]),
             on_success=after_move,
             on_failure=self._on_live_move_failed,
             show_success=False,
@@ -1824,6 +1932,7 @@ class OCRApp(QMainWindow):
         )
 
     def _on_live_move_failed(self, result):
+        self._stop_red_light_flash()
         if self.live_worker is not None:
             self.live_worker.stop()
         QMessageBox.warning(self, "自动移槽失败", result.message)
@@ -1833,6 +1942,7 @@ class OCRApp(QMainWindow):
 
         保存截图、返回料盘原点、恢复按钮并弹提示。
         """
+        self._stop_red_light_flash()
         stopped = self._task_stop_requested or bool(getattr(self.live_worker, "was_stopped", False))
         self.live_worker = None
 
@@ -1863,6 +1973,7 @@ class OCRApp(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭前确保所有后台线程干净退出，避免进程僵死。"""
+        self._stop_red_light_flash()
         # 停止实时识别（stop() 会 set() 内部 Event，让线程从 wait() 中退出）
         if self.live_worker is not None and self.live_worker.isRunning():
             self.live_worker.stop()

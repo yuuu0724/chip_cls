@@ -4,8 +4,9 @@
 --------------------
 1. 若不是第一个槽位，发出 ``request_move_confirm`` 信号，等待 UI 自动移槽完成；
 2. 在约 1 秒内连续采集 3 帧摄像头图像，逐帧调用 OCR 引擎推理；
-3. 三帧识别结果（status）完全一致 → 视为该槽位识别成功；否则重新采集，
-   最多重试 ``_MAX_RETRY_ROUNDS`` 轮；
+3. 每轮采集三帧；至少采集 ``live_min_retry_rounds`` 轮，达到最少轮数后，
+   若本轮三帧识别结果（status）完全一致则进入下一槽位，最多采集
+   ``live_max_retry_rounds`` 轮；
 4. 将最终结果通过 ``slot_recognized`` 信号回到主线程更新 UI，
    UI 可在自动模式下先执行运动控制，再调用 ``confirm_move()``。
 
@@ -28,8 +29,9 @@ from ocr import MaterialController
 
 logger = logging.getLogger(__name__)
 
-# 每个槽位最多采集多少轮（每轮3帧），超过则强制推进
-_MAX_RETRY_ROUNDS = 10
+# 每个槽位默认采集轮数范围（每轮3帧），可通过 app_config.json 覆盖
+DEFAULT_MIN_RETRY_ROUNDS = 3
+DEFAULT_MAX_RETRY_ROUNDS = 6
 # 每帧间隔毫秒数；3帧合计约 1 秒
 _FRAME_INTERVAL_MS = 333
 
@@ -64,6 +66,8 @@ class LiveInspectionWorker(QThread):
         data_logger,
         total_slots,
         slot_order=None,
+        min_retry_rounds=DEFAULT_MIN_RETRY_ROUNDS,
+        max_retry_rounds=DEFAULT_MAX_RETRY_ROUNDS,
         mode="auto",
         parent=None,
     ):
@@ -95,6 +99,10 @@ class LiveInspectionWorker(QThread):
         self.data_logger = data_logger
         self.total_slots = total_slots
         self.slot_order = self._normalize_slot_order(slot_order, total_slots)
+        self.min_retry_rounds, self.max_retry_rounds = self._normalize_retry_rounds(
+            min_retry_rounds,
+            max_retry_rounds,
+        )
         self.display_slot_numbers = {
             slot_index: order_pos + 1
             for order_pos, slot_index in enumerate(self.slot_order)
@@ -123,6 +131,21 @@ class LiveInspectionWorker(QThread):
                 normalized.append(index)
                 seen.add(index)
         return normalized or list(range(total_slots))
+
+    @staticmethod
+    def _normalize_retry_rounds(min_rounds, max_rounds):
+        try:
+            min_rounds = int(min_rounds)
+        except (TypeError, ValueError):
+            min_rounds = DEFAULT_MIN_RETRY_ROUNDS
+        try:
+            max_rounds = int(max_rounds)
+        except (TypeError, ValueError):
+            max_rounds = DEFAULT_MAX_RETRY_ROUNDS
+
+        min_rounds = max(1, min_rounds)
+        max_rounds = max(min_rounds, max_rounds)
+        return min_rounds, max_rounds
 
     def _display_slot_number(self, slot_index):
         return self.display_slot_numbers.get(slot_index, slot_index + 1)
@@ -219,7 +242,8 @@ class LiveInspectionWorker(QThread):
     def _infer_slot_with_consensus(self, slot_index):
         """连续采集 3 帧推理，三帧结果一致则返回，否则重试。
 
-        最多重试 ``_MAX_RETRY_ROUNDS`` 轮（每轮 ~1 秒）；超出后强制取最后一帧结果，
+        至少采集 ``min_retry_rounds`` 轮，最多采集 ``max_retry_rounds`` 轮；
+        达到最少轮数后，若本轮 3 帧结果一致则返回；超出后强制取最后一帧结果，
         防止单槽位无限阻塞。
 
         Returns
@@ -229,7 +253,7 @@ class LiveInspectionWorker(QThread):
         """
         last_results = []
 
-        for attempt in range(_MAX_RETRY_ROUNDS):
+        for attempt in range(self.max_retry_rounds):
             if self._stop_flag or not self._wait_if_paused():
                 break
 
@@ -261,10 +285,18 @@ class LiveInspectionWorker(QThread):
             statuses = [r[0] for r in round_results]
             if len(set(statuses)) == 1:
                 logger.info(
-                    "槽位 %02d 连续3帧一致: %s（第 %d 轮）",
-                    self._display_slot_number(slot_index), statuses[0], attempt + 1,
+                    "槽位 %02d 第 %d/%d 轮连续3帧一致: %s",
+                    self._display_slot_number(slot_index),
+                    attempt + 1,
+                    self.max_retry_rounds,
+                    statuses[0],
                 )
-                return round_results[0]
+                if attempt + 1 >= self.min_retry_rounds:
+                    return round_results[0]
+                self.status_message.emit(
+                    f"槽位 {self._display_slot_number(slot_index)} 已稳定，继续采集至最少 {self.min_retry_rounds} 轮..."
+                )
+                continue
 
             logger.info(
                 "槽位 %02d 第 %d 轮结果不一致: %s，重新采集",
@@ -274,12 +306,21 @@ class LiveInspectionWorker(QThread):
                 f"槽位 {self._display_slot_number(slot_index)} 三帧不一致（{statuses}），重新采集..."
             )
 
-        # 超出最大重试次数，取最后一轮第一帧兜底
-        if last_results:
-            logger.warning("槽位 %02d 超出最大重试轮次，使用最后一帧结果", self._display_slot_number(slot_index))
+        if self._stop_flag and last_results:
             return last_results[0]
 
-        return "识别失败", "red", {"texts": [], "angle": 0, "status": "error: max_retry"}
+        logger.warning(
+            "槽位 %02d 限定轮数内未获得稳定识别结果，标记为识别失败",
+            self._display_slot_number(slot_index),
+        )
+        return "识别失败", "red", {
+            "texts": [],
+            "all_texts": [],
+            "items": [],
+            "angle": 0,
+            "status": "error: consensus_timeout",
+            "reason": "限定轮数内未获得稳定识别结果",
+        }
 
     # ------------------------------------------------------------------
     # 线程主体
@@ -329,6 +370,7 @@ class LiveInspectionWorker(QThread):
             self.data_logger.save_slot_image(
                 display_slot_no,
                 result.pop("_slot_source_frame_bgr", None),
+                selected_chip_bbox=result.get("selected_chip_bbox"),
             )
 
             # 通知 UI 更新槽位显示

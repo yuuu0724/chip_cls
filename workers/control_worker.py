@@ -195,7 +195,11 @@ class ControlWorker(QThread):
         )
         # 日志用 1 基准编号；"|" 是多文本的轻量分隔符（CSV 字段内不会与逗号冲突）
         self.data_logger.log_result(slot_index + 1, all_text_with_scores, angle, status)
-        self.data_logger.save_slot_image(slot_index + 1, source_image)
+        self.data_logger.save_slot_image(
+            slot_index + 1,
+            source_image,
+            selected_chip_bbox=result.get("selected_chip_bbox"),
+        )
         self.progress_update.emit(slot_index, status, color)
 
     def run(self):

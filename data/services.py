@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from motion import ModbusMotionController
+from motion import ConfigurableLightController, ModbusMotionController
 from ocr import OCREngine, TemplateManager
 
 from .config_manager import ConfigManager
@@ -65,6 +65,7 @@ class AppServices:
     data_logger: DataLogger
     config_manager: ConfigManager
     device_controller: ModbusMotionController | None = None
+    light_controller: ConfigurableLightController | None = None
 
     @classmethod
     def create_default(cls) -> "AppServices":
@@ -87,6 +88,10 @@ class AppServices:
         tray_manager = TrayManager()
         data_logger = DataLogger()
         device_controller = ModbusMotionController.from_config(config_manager.get_config())
+        light_controller = ConfigurableLightController(
+            motion_controller=device_controller,
+            config=config_manager.get_config(),
+        )
         return cls(
             engine=engine,
             template_manager=template_manager,
@@ -94,4 +99,5 @@ class AppServices:
             data_logger=data_logger,
             config_manager=config_manager,
             device_controller=device_controller,
+            light_controller=light_controller,
         )

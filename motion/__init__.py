@@ -14,6 +14,7 @@ from .modbus_motion_controller import (
     y_mm_to_pulses,
     z_mm_to_pulses,
 )
+from .light_controller import ConfigurableLightController
 
 __all__ = [
     "AXIS_D_REGISTERS",
@@ -21,6 +22,7 @@ __all__ = [
     "AXIS_SOFT_LIMITS",
     "MotionCommandResult",
     "ModbusMotionController",
+    "ConfigurableLightController",
     "combine_s32_from_words",
     "d_addr",
     "pulses_to_mm",

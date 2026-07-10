@@ -710,17 +710,26 @@ class AddTrayDialog(QDialog):
         existing_ids,
         coordinate_provider=None,
         center_status_provider=None,
+        jog_speed=None,
         parent=None,
         initial_data=None,
         edit_mode=False,
     ):
         super().__init__(parent)
         self.setWindowTitle("编辑料盘" if edit_mode else "新增料盘")
-        self.setFixedSize(920, 700)
-        self.setStyleSheet("QDialog { background-color: #1a1a1e; } QLabel { color: #ffffff; }")
+        self.resize(980, 720)
+        self.setMinimumSize(820, 620)
+        self.setStyleSheet(
+            """
+            QDialog { background-color: #1a1a1e; }
+            QLabel { color: #ffffff; }
+            QWidget { background-color: transparent; }
+            """
+        )
         self.existing_ids = existing_ids
         self.coordinate_provider = coordinate_provider
         self.center_status_provider = center_status_provider
+        self.jog_speeds = self._normalize_jog_speeds(jog_speed)
         self.initial_data = initial_data or {}
         self.edit_mode = bool(edit_mode)
         self.original_tray_id = str(
@@ -744,9 +753,40 @@ class AddTrayDialog(QDialog):
         root_layout.addLayout(content_layout, 1)
 
         left_panel = QWidget()
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setStyleSheet(
+            """
+            QScrollArea {
+                border: none;
+                background-color: #1a1a1e;
+            }
+            QScrollArea > QWidget,
+            QScrollArea > QWidget > QWidget {
+                background-color: #1a1a1e;
+            }
+            QScrollBar:vertical {
+                background-color: #1a1a1e;
+                width: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #444449;
+                border-radius: 5px;
+                min-height: 24px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            """
+        )
         right_panel = QWidget()
+        right_panel.setStyleSheet("background-color: #1a1a1e;")
+        right_scroll.setWidget(right_panel)
         content_layout.addWidget(left_panel, 1)
-        content_layout.addWidget(right_panel, 1)
+        content_layout.addWidget(right_scroll, 1)
 
         layout = QVBoxLayout(left_panel)
         layout.setSpacing(10)
@@ -821,7 +861,7 @@ class AddTrayDialog(QDialog):
         custom_layout.setContentsMargins(0, 0, 0, 0)
         custom_layout.setSpacing(8)
 
-        custom_rows_label = QLabel("行(X轴)")
+        custom_rows_label = QLabel("行(Y轴)")
         custom_rows_label.setStyleSheet(self._LABEL_STYLE)
         custom_layout.addWidget(custom_rows_label)
 
@@ -833,7 +873,7 @@ class AddTrayDialog(QDialog):
         self.rows_spin.valueChanged.connect(self._update_custom_spec_summary)
         custom_layout.addWidget(self.rows_spin)
 
-        custom_cols_label = QLabel("列(Y轴)")
+        custom_cols_label = QLabel("列(X轴)")
         custom_cols_label.setStyleSheet(self._LABEL_STYLE)
         custom_layout.addWidget(custom_cols_label)
 
@@ -853,10 +893,10 @@ class AddTrayDialog(QDialog):
 
         pitch_row = QHBoxLayout()
         pitch_row.setSpacing(8)
-        pitch_row.addWidget(self._small_label("行间距"))
+        pitch_row.addWidget(self._small_label("行间距(Y轴)"))
         self.pitch_x_spin = self._distance_spin(1.0)
         pitch_row.addWidget(self.pitch_x_spin)
-        pitch_row.addWidget(self._small_label("列间距"))
+        pitch_row.addWidget(self._small_label("列间距(X轴)"))
         self.pitch_y_spin = self._distance_spin(1.0)
         pitch_row.addWidget(self.pitch_y_spin)
         layout.addLayout(pitch_row)
@@ -920,12 +960,14 @@ class AddTrayDialog(QDialog):
 
             minus_btn = QPushButton(f"{axis}-")
             minus_btn.setFixedHeight(36)
+            minus_btn.setMinimumWidth(54)
             minus_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
             minus_btn.clicked.connect(lambda _=False, a=axis.lower(): self._request_jog(a, -1))
             axis_row.addWidget(minus_btn)
 
             plus_btn = QPushButton(f"{axis}+")
             plus_btn.setFixedHeight(36)
+            plus_btn.setMinimumWidth(54)
             plus_btn.setStyleSheet(TemplateConfirmDialog._secondary_button_style())
             plus_btn.clicked.connect(lambda _=False, a=axis.lower(): self._request_jog(a, 1))
             axis_row.addWidget(plus_btn)
@@ -1065,7 +1107,7 @@ class AddTrayDialog(QDialog):
             QMessageBox.warning(self, "提示", "行数、列数必须大于 0。")
             return
         if self.pitch_x_spin.value() <= 0 or self.pitch_y_spin.value() <= 0:
-            QMessageBox.warning(self, "提示", "行间距、列间距必须大于 0。")
+            QMessageBox.warning(self, "提示", "行间距(Y轴)、列间距(X轴)必须大于 0。")
             return
         if not self._ensure_chip_centered():
             return
@@ -1157,7 +1199,25 @@ class AddTrayDialog(QDialog):
     def _request_jog(self, axis, direction):
         step_mm = float(self.axis_step_spins[axis].value())
         pulses = self._coordinate_pulses(axis, step_mm) * int(direction)
-        self.jog_requested.emit(axis, pulses, self.DEFAULT_JOG_SPEED)
+        self.jog_requested.emit(axis, pulses, self.jog_speeds.get(axis, self.DEFAULT_JOG_SPEED))
+
+    @classmethod
+    def _normalize_jog_speeds(cls, value):
+        if isinstance(value, dict):
+            speeds = {}
+            for axis in ("x", "y", "z"):
+                try:
+                    speed = int(value.get(axis, cls.DEFAULT_JOG_SPEED))
+                except (TypeError, ValueError):
+                    speed = cls.DEFAULT_JOG_SPEED
+                speeds[axis] = max(1, speed)
+            return speeds
+        try:
+            speed = int(value or cls.DEFAULT_JOG_SPEED)
+        except (TypeError, ValueError):
+            speed = cls.DEFAULT_JOG_SPEED
+        speed = max(1, speed)
+        return {"x": speed, "y": speed, "z": speed}
 
     def _update_center_status(self):
         status = self._read_center_status()

@@ -118,8 +118,8 @@ class DataLogger:
 
         return self.current_file
 
-    def save_slot_image(self, slot_id, frame_bgr):
-        """保存单个槽位的真实图像，文件名使用 1 基准槽位序号。"""
+    def save_slot_image(self, slot_id, frame_bgr, selected_chip_bbox=None):
+        """保存单个槽位图像，并在图中标出本次 OCR 选中的芯片。"""
         if self.current_slot_image_dir is None:
             print("警告：未初始化槽位图片目录，跳过保存")
             return False
@@ -132,11 +132,13 @@ class DataLogger:
         except (TypeError, ValueError):
             slot_no = str(slot_id).strip() or "UNKNOWN"
 
-        output_path = os.path.join(self.current_slot_image_dir, f"{slot_no}.jpg")
         try:
             import cv2
 
-            ok, encoded = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            output_path = os.path.join(self.current_slot_image_dir, f"{slot_no}.jpg")
+            output_image = frame_bgr.copy()
+            self._draw_selected_chip_marker(cv2, output_image, selected_chip_bbox, slot_no)
+            ok, encoded = cv2.imencode(".jpg", output_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
             if not ok:
                 print(f"槽位图片保存失败：无法编码 {output_path}")
                 return False
@@ -145,6 +147,54 @@ class DataLogger:
         except Exception as e:
             print(f"槽位图片保存失败：{e}")
             return False
+
+    @staticmethod
+    def _draw_selected_chip_marker(cv2, image, selected_chip_bbox, slot_no):
+        if not selected_chip_bbox or len(selected_chip_bbox) != 4:
+            return
+
+        height, width = image.shape[:2]
+        try:
+            x1, y1, x2, y2 = [int(round(float(value))) for value in selected_chip_bbox]
+        except (TypeError, ValueError):
+            return
+
+        x1 = max(0, min(width - 1, x1))
+        x2 = max(0, min(width - 1, x2))
+        y1 = max(0, min(height - 1, y1))
+        y2 = max(0, min(height - 1, y2))
+        if x2 <= x1 or y2 <= y1:
+            return
+
+        thickness = max(2, min(width, height) // 180)
+        color = (0, 255, 0)
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
+
+        label = f"Slot {slot_no} OCR chip"
+        font_scale = max(0.5, min(width, height) / 900.0)
+        text_thickness = max(1, thickness - 1)
+        (text_w, text_h), baseline = cv2.getTextSize(
+            label,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            text_thickness,
+        )
+        label_x = x1
+        label_y = max(text_h + baseline + 4, y1 - 6)
+        bg_x2 = min(width - 1, label_x + text_w + 8)
+        bg_y1 = max(0, label_y - text_h - baseline - 6)
+        bg_y2 = min(height - 1, label_y + baseline + 2)
+        cv2.rectangle(image, (label_x, bg_y1), (bg_x2, bg_y2), color, -1)
+        cv2.putText(
+            image,
+            label,
+            (label_x + 4, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 0, 0),
+            text_thickness,
+            cv2.LINE_AA,
+        )
 
     def log_result(self, slot_id, all_text, angle, status):
         """追加一行单槽位检测结果到 CSV。

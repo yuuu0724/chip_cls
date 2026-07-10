@@ -20,6 +20,10 @@ import sys
 from datetime import datetime
 
 
+DEFAULT_ROW_DIRECTION = -1
+DEFAULT_COL_DIRECTION = 1
+
+
 def _app_root():
     """返回应用根目录（和 `ConfigManager._app_root` 语义一致）。"""
     if getattr(sys, "frozen", False):
@@ -40,6 +44,20 @@ class TrayManager:
             config_file = os.path.join(_app_root(), "config", "trays_config.json")
         self.config_file = config_file
         self.trays = self.load_trays()
+        if self._normalize_tray_directions():
+            self.save_trays()
+
+    def _normalize_tray_directions(self):
+        """统一料盘坐标方向：第1行第1个为 01，向右 X+，向上 Y-。"""
+        changed = False
+        for tray in self.trays.values():
+            if tray.get("rowDirection") != DEFAULT_ROW_DIRECTION:
+                tray["rowDirection"] = DEFAULT_ROW_DIRECTION
+                changed = True
+            if tray.get("colDirection") != DEFAULT_COL_DIRECTION:
+                tray["colDirection"] = DEFAULT_COL_DIRECTION
+                changed = True
+        return changed
 
     def load_trays(self):
         """读取配置；文件不存在或解析失败就用内置默认料盘。"""
@@ -150,8 +168,8 @@ class TrayManager:
             "originX": origin.get("x"),
             "originY": origin.get("y"),
             "originZ": origin.get("z"),
-            "rowDirection": tray.get("rowDirection", 1),
-            "colDirection": tray.get("colDirection", 1),
+            "rowDirection": tray.get("rowDirection", DEFAULT_ROW_DIRECTION),
+            "colDirection": tray.get("colDirection", DEFAULT_COL_DIRECTION),
         }
 
     def is_tray_config_complete(self, tray_id):
@@ -255,8 +273,8 @@ class TrayManager:
                 "z": float(origin_z) if origin_z is not None else None,
             },
             "lightConfig": light_config or {},
-            "rowDirection": 1,
-            "colDirection": 1,
+            "rowDirection": DEFAULT_ROW_DIRECTION,
+            "colDirection": DEFAULT_COL_DIRECTION,
             "status": "可用",
             "createdAt": now,
             "updatedAt": now,

@@ -103,7 +103,7 @@
     "updatedAt": "2026-06-23T10:52:06"
   },
   "IEE1931-CQFP100": {
-    "angle": 0,
+    "angle": 180,
     "description": "用户从图片手动确认的模板",
     "modelName": "IEE1931-CQFP100",
     "standardChipModel": "IEE1931-CQFP100",
@@ -112,14 +112,14 @@
       "HX-1",
       "B001298"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\IEE1931-CQFP100_20260604_151612.png",
-    "trayId": "yanshi",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\IEE1931-CQFP100_20260710_141156.png",
+    "trayId": "演示4",
     "lightConfig": {
       "light1Voltage": 0.0,
       "light2Voltage": 0.0
     },
     "createdAt": "2026-05-15T09:35:59",
-    "updatedAt": "2026-06-04T15:16:12"
+    "updatedAt": "2026-07-10T14:11:56"
   },
   "1N5": {
     "angle": 180,
@@ -205,14 +205,14 @@
       "1N5",
       "JT"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\822_20260608_195130.png",
-    "trayId": "演示2",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\822_20260710_135938.png",
+    "trayId": "演示3",
     "lightConfig": {
       "light1Voltage": 0.0,
       "light2Voltage": 0.0
     },
     "createdAt": "2026-05-29T14:09:26",
-    "updatedAt": "2026-06-08T19:51:30"
+    "updatedAt": "2026-07-10T13:59:38"
   },
   "JT.": {
     "angle": 180,
@@ -232,5 +232,20 @@
     },
     "createdAt": "2026-06-05T15:56:00",
     "updatedAt": "2026-06-05T15:56:00"
+  },
+  "15A546": {
+    "angle": 90,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "15A546",
+    "standardChipModel": "15A546",
+    "ocrTexts": [
+      "15A546",
+      "DOWO"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\15A546_20260710_141515.png",
+    "trayId": "5",
+    "lightConfig": {},
+    "createdAt": "2026-07-10T14:15:15",
+    "updatedAt": "2026-07-10T14:15:15"
   }
 }

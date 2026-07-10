@@ -124,6 +124,21 @@ class ModbusMotionController:
         post_home_x_position: int | None = None,
         post_home_y_position: int | None = None,
         post_home_z_position: int = POST_HOME_Z_POSITION,
+        speed_register_x: int | None = None,
+        speed_register_y: int | None = None,
+        speed_register_z: int | None = None,
+        acceleration_register_x: int | None = None,
+        acceleration_register_y: int | None = None,
+        acceleration_register_z: int | None = None,
+        deceleration_register_x: int | None = None,
+        deceleration_register_y: int | None = None,
+        deceleration_register_z: int | None = None,
+        acceleration_x: int | None = None,
+        acceleration_y: int | None = None,
+        acceleration_z: int | None = None,
+        deceleration_x: int | None = None,
+        deceleration_y: int | None = None,
+        deceleration_z: int | None = None,
     ):
         self.port = port or DEFAULT_PORT
         self.slave_id = int(slave_id)
@@ -136,6 +151,31 @@ class ModbusMotionController:
             "z": _config_optional_int(post_home_z_position),
             "x": _config_optional_int(post_home_x_position),
             "y": _config_optional_int(post_home_y_position),
+        }
+        self.axis_speed_registers = {
+            "x": _config_optional_int(speed_register_x) or AXIS_D_REGISTERS["x"]["speed"],
+            "y": _config_optional_int(speed_register_y) or AXIS_D_REGISTERS["y"]["speed"],
+            "z": _config_optional_int(speed_register_z) or AXIS_D_REGISTERS["z"]["speed"],
+        }
+        self.axis_acceleration_registers = {
+            "x": _config_optional_int(acceleration_register_x),
+            "y": _config_optional_int(acceleration_register_y),
+            "z": _config_optional_int(acceleration_register_z),
+        }
+        self.axis_deceleration_registers = {
+            "x": _config_optional_int(deceleration_register_x),
+            "y": _config_optional_int(deceleration_register_y),
+            "z": _config_optional_int(deceleration_register_z),
+        }
+        self.axis_accelerations = {
+            "x": _config_optional_int(acceleration_x),
+            "y": _config_optional_int(acceleration_y),
+            "z": _config_optional_int(acceleration_z),
+        }
+        self.axis_decelerations = {
+            "x": _config_optional_int(deceleration_x),
+            "y": _config_optional_int(deceleration_y),
+            "z": _config_optional_int(deceleration_z),
         }
         self.post_home_z_position = self.post_home_positions["z"]
 
@@ -159,6 +199,21 @@ class ModbusMotionController:
             post_home_x_position=config.get("post_home_x_position"),
             post_home_y_position=config.get("post_home_y_position"),
             post_home_z_position=config.get("post_home_z_position", POST_HOME_Z_POSITION),
+            speed_register_x=config.get("motion_speed_register_x"),
+            speed_register_y=config.get("motion_speed_register_y"),
+            speed_register_z=config.get("motion_speed_register_z"),
+            acceleration_register_x=config.get("motion_acceleration_register_x"),
+            acceleration_register_y=config.get("motion_acceleration_register_y"),
+            acceleration_register_z=config.get("motion_acceleration_register_z"),
+            deceleration_register_x=config.get("motion_deceleration_register_x"),
+            deceleration_register_y=config.get("motion_deceleration_register_y"),
+            deceleration_register_z=config.get("motion_deceleration_register_z"),
+            acceleration_x=config.get("motion_acceleration_x"),
+            acceleration_y=config.get("motion_acceleration_y"),
+            acceleration_z=config.get("motion_acceleration_z"),
+            deceleration_x=config.get("motion_deceleration_x"),
+            deceleration_y=config.get("motion_deceleration_y"),
+            deceleration_z=config.get("motion_deceleration_z"),
         )
 
     @property
@@ -458,7 +513,7 @@ class ModbusMotionController:
                 trigger_addr = d_addr(axis_def["trigger"])
                 move_addr = d_addr(axis_def["move"])
                 position_addr = d_addr(axis_def["position"])
-                speed_addr = d_addr(axis_def["speed"])
+                speed_addr = d_addr(self._axis_speed_register(axis_key))
 
                 start_pos = self.read_32bit_register(position_addr)
                 expected_pos = start_pos + move_pulses
@@ -472,6 +527,8 @@ class ModbusMotionController:
                 )
                 self.write_32bit_register(move_addr, move_pulses)
                 self.write_32bit_register(speed_addr, speed)
+                self._write_axis_acceleration_if_configured(axis_key)
+                self._write_axis_deceleration_if_configured(axis_key)
                 self.write_32bit_register(trigger_addr, 1)
                 time.sleep(0.05)
                 self.write_32bit_register(trigger_addr, 0)
@@ -552,6 +609,16 @@ class ModbusMotionController:
     def move_to_coordinate(self, x, y, z, speed: int | None = None):
         """按累计脉冲坐标顺序移动到指定 XYZ 位置。"""
         speed = int(speed or 1000)
+        return self.move_to_coordinate_with_axis_speeds(
+            x,
+            y,
+            z,
+            {"x": speed, "y": speed, "z": speed},
+        )
+
+    def move_to_coordinate_with_axis_speeds(self, x, y, z, speeds: dict[str, Any] | None = None):
+        """按累计脉冲坐标移动，X/Y/Z 轴分别使用独立速度。"""
+        speeds = speeds or {}
         try:
             current = self.get_all_positions()
             targets = {"x": int(round(float(x))), "y": int(round(float(y))), "z": int(round(float(z)))}
@@ -562,7 +629,8 @@ class ModbusMotionController:
             delta = targets[axis] - current[axis]
             if delta == 0:
                 continue
-            result = self.move_axis_pulses(axis, delta, speed)
+            axis_speed = max(1, _config_int(speeds.get(axis), 1000))
+            result = self.move_axis_pulses(axis, delta, axis_speed)
             if not result.success:
                 return result
             current.update(result.data.get("position", {}))
@@ -601,6 +669,26 @@ class ModbusMotionController:
         if axis_key not in AXIS_D_REGISTERS:
             raise ValueError(f"非法轴名称：{axis}")
         return axis_key
+
+    def _axis_speed_register(self, axis: str) -> int:
+        axis_key = self._normalize_axis(axis)
+        return int(self.axis_speed_registers.get(axis_key) or AXIS_D_REGISTERS[axis_key]["speed"])
+
+    def _write_axis_acceleration_if_configured(self, axis: str):
+        axis_key = self._normalize_axis(axis)
+        register = self.axis_acceleration_registers.get(axis_key)
+        value = self.axis_accelerations.get(axis_key)
+        if register is None or value is None:
+            return
+        self.write_32bit_register(d_addr(register), value)
+
+    def _write_axis_deceleration_if_configured(self, axis: str):
+        axis_key = self._normalize_axis(axis)
+        register = self.axis_deceleration_registers.get(axis_key)
+        value = self.axis_decelerations.get(axis_key)
+        if register is None or value is None:
+            return
+        self.write_32bit_register(d_addr(register), value)
 
     @staticmethod
     def _format_position(position: dict[str, Any]) -> str:

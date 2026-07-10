@@ -36,6 +36,7 @@ python -m compileall main.py ui ocr data workers ocr_onnx_py
 
 ## 关键架构约束
 
+执行修改代码之前必须给我看方案
 - **ONNX Session 类级共享**：`OCREngine._shared_detector/classifier/recognizer` 必须跨实例复用，不可重构为实例级状态；`AppServices.create_default()` 中需先创建 `OCREngine`，再创建 `TemplateManager`，避免重复加载模型
 - **DLL 注册顺序**：`main.py` 与 `ocr_onnx_py/session_utils.py` 中必须先注册 NVIDIA DLL 目录，再执行 `import onnxruntime`
 - **路径解析**：`ocr/engine.py` 中 `get_resource_root()` 使用 `parents[1]`（项目根目录），`get_helper_root()` 使用 `parents[1] / "ocr_onnx_py"`
@@ -72,3 +73,4 @@ python -m compileall main.py ui ocr data workers ocr_onnx_py
 - 不要提交生成文件：`logs/`、`results/`、`build/`、`dist/`、`config/app_config.json`、`config/trays_config.json`
 - 不要提交本地 IDE 或 Claude 会话配置：`.idea/`、`.claude/settings.local.json`
 - `config/templates.json` 视为共享初始数据，仅在默认模板集合确实变更时更新
+
