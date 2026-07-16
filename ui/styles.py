@@ -207,6 +207,31 @@ START_BUTTON = """
     }
 """
 
+# 调试检测（青色，区别于正式检测和暂停/结束）
+DEBUG_BUTTON = """
+    QPushButton {
+        background-color: rgba(48, 209, 218, 0.24);
+        color: #ffffff;
+        border: 1px solid rgba(48, 209, 218, 0.82);
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    QPushButton:hover {
+        background-color: rgba(48, 209, 218, 0.36);
+        border: 1px solid rgba(64, 226, 235, 0.95);
+    }
+    QPushButton:pressed {
+        background-color: rgba(18, 145, 154, 0.58);
+        border: 1px solid rgba(18, 145, 154, 0.95);
+    }
+    QPushButton:disabled {
+        background-color: rgba(90, 90, 95, 0.45);
+        color: #8e8e93;
+        border: 1px solid rgba(120, 120, 125, 0.45);
+    }
+"""
+
 # 刷新（灰色半透明）
 REFRESH_BUTTON = """
     QPushButton {

@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from data import AppServices
-from workers import CameraWorker, DeviceController, LiveInspectionWorker
+from workers import CameraWorker, ControlWorker, DeviceController, LiveInspectionWorker
 
 from . import styles as S
 from .dialogs import (
@@ -52,6 +52,8 @@ from .dialogs import (
 from .material_slot import MaterialSlot
 
 logger = logging.getLogger(__name__)
+
+DETECTION_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
 
 class MotionTaskWorker(QThread):
@@ -142,6 +144,7 @@ class OCRApp(QMainWindow):
         self.live_worker = None     # 正在运行的实时识别线程（None 表示空闲）
         self.motion_worker = None   # 正在运行的运动控制线程
         self.chip_preview_worker = None
+        self.debug_worker = None
         self.slots = []             # 当前料盘的槽位组件列表
         self.chip_preview_result = None
         self.chip_preview_last_started = 0.0
@@ -523,6 +526,12 @@ class OCRApp(QMainWindow):
 
         button_section_layout.addLayout(run_control_row)
 
+        self.debug_btn = QPushButton("调试检测")
+        self.debug_btn.setMinimumHeight(34)
+        self.debug_btn.setStyleSheet(S.DEBUG_BUTTON)
+        self.debug_btn.clicked.connect(self.start_debug_inspection)
+        button_section_layout.addWidget(self.debug_btn)
+
         # 刷新：重置所有槽位到"待机"
         bottom_action_row = QHBoxLayout()
         bottom_action_row.setSpacing(5)
@@ -798,8 +807,9 @@ class OCRApp(QMainWindow):
             QMessageBox.warning(self, "提示", "至少保留一个料盘，不能全部删除。")
             return
 
-        if self.live_worker is not None and self.live_worker.isRunning():
-            QMessageBox.warning(self, "提示", "实时识别进行中，请结束后再删除。")
+        if (self.live_worker is not None and self.live_worker.isRunning()) or \
+                (self.debug_worker is not None and self.debug_worker.isRunning()):
+            QMessageBox.warning(self, "提示", "检测任务进行中，请结束后再删除。")
             return
 
         reply = QMessageBox.question(
@@ -1045,6 +1055,8 @@ class OCRApp(QMainWindow):
         self.stop_btn.setEnabled(True)
         self.pause_btn.setEnabled(pause_enabled)
         self.pause_btn.setText("继续检测" if self._task_paused else "暂停检测")
+        if hasattr(self, "debug_btn"):
+            self.debug_btn.setEnabled(False)
 
     def _set_task_controls_idle(self):
         self.start_btn.setEnabled(True)
@@ -1052,9 +1064,14 @@ class OCRApp(QMainWindow):
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("暂停检测")
         self._task_paused = False
+        if hasattr(self, "debug_btn"):
+            self.debug_btn.setEnabled(not self._is_debug_running())
 
     def _is_live_running(self):
         return self.live_worker is not None and self.live_worker.isRunning()
+
+    def _is_debug_running(self):
+        return self.debug_worker is not None and self.debug_worker.isRunning()
 
     @staticmethod
     def _build_natural_slot_order(rows, cols):
@@ -1084,6 +1101,8 @@ class OCRApp(QMainWindow):
         """暂停或继续当前检测任务。"""
         if self._active_task_mode == "live" and self._is_live_running():
             target = self.live_worker
+        elif self._active_task_mode == "debug" and self._is_debug_running():
+            target = self.debug_worker
         else:
             return
 
@@ -1115,6 +1134,8 @@ class OCRApp(QMainWindow):
 
         if self._is_live_running():
             self.live_worker.stop()
+        elif self._active_task_mode == "debug" and self._is_debug_running():
+            self.debug_worker.stop()
         elif self._active_task_mode == "live_starting":
             self._request_return_to_first_slot(self._finish_stopped_task_after_return)
 
@@ -1599,6 +1620,7 @@ class OCRApp(QMainWindow):
         UI 更新（见 `update_slot_ui`）。
         """
         if (self.live_worker is not None and self.live_worker.isRunning()) or \
+                (self.debug_worker is not None and self.debug_worker.isRunning()) or \
                 (self.motion_worker is not None and self.motion_worker.isRunning()):
             QMessageBox.warning(self, "提示", "任务进行中，请结束后再刷新。")
             return
@@ -1627,6 +1649,94 @@ class OCRApp(QMainWindow):
 
         os.makedirs(logger_dir, exist_ok=True)
         return logger_dir
+
+    def start_debug_inspection(self):
+        """选择图片目录并启动调试批量检测。"""
+        if self._active_task_mode is not None or self._is_live_running():
+            QMessageBox.warning(self, "提示", "正式检测进行中，请结束后再调试。")
+            return
+        if self.motion_worker is not None and self.motion_worker.isRunning():
+            QMessageBox.warning(self, "提示", "运动任务进行中，请等待完成后再调试。")
+            return
+        if self._is_debug_running():
+            QMessageBox.information(self, "提示", "调试检测正在运行，请稍候。")
+            return
+
+        initial_dir = self.services.config_manager.get_image_directory() or self.get_results_directory()
+        image_dir = QFileDialog.getExistingDirectory(
+            self,
+            "选择调试检测目录",
+            initial_dir,
+        )
+        if not image_dir:
+            return
+
+        if not self.services.config_manager.set_image_directory(image_dir):
+            QMessageBox.warning(self, "目录无效", "无法保存调试检测目录，请确认目录仍然存在。")
+            return
+
+        image_files = self._list_detection_images(image_dir)
+        if not image_files:
+            QMessageBox.warning(
+                self,
+                "目录无图片",
+                "所选目录中没有可检测图片。\n\n支持格式：.png / .jpg / .jpeg / .bmp",
+            )
+            return
+
+        total_slots = len(self.slots) if self.slots else len(image_files)
+        tray_id = self.tray_combo.currentData() or "DEBUG"
+        tray_name = self.tray_combo.currentText().strip() or "调试检测"
+        self.services.data_logger.start_new_batch(
+            tray_id,
+            expected_slots=total_slots,
+            tray_name=tray_name,
+        )
+
+        for slot in self.slots:
+            slot.reset()
+
+        self.debug_worker = ControlWorker(
+            engine=self.services.engine,
+            img_dir=image_dir,
+            target_m=self._current_template_match_texts(),
+            target_a=self.angle_input.text(),
+            data_logger=self.services.data_logger,
+            total_slots=total_slots,
+        )
+        self.debug_worker.progress_update.connect(self.update_slot_ui)
+        self.debug_worker.finished.connect(self.on_debug_inspection_finished)
+        self._active_task_mode = "debug"
+        self._task_stop_requested = False
+        self._task_paused = False
+        self._set_task_controls_running(pause_enabled=True)
+        self.statusBar().showMessage(f"调试检测运行中：{image_dir}", 5000)
+        self.debug_worker.start()
+
+    def on_debug_inspection_finished(self):
+        """调试批量检测结束后恢复按钮状态并保存界面截图。"""
+        stopped = self._task_stop_requested or bool(getattr(self.debug_worker, "was_stopped", False))
+        if not stopped:
+            self.services.data_logger.save_ui_screenshot(self)
+        self.debug_worker = None
+        self._active_task_mode = None
+        self._task_stop_requested = False
+        self._set_task_controls_idle()
+        if stopped:
+            QMessageBox.information(self, "已结束", "调试检测已结束。")
+        else:
+            QMessageBox.information(self, "完成", "调试检测已完成。")
+        self.setFocus()
+
+    @staticmethod
+    def _list_detection_images(directory):
+        try:
+            return [
+                name for name in os.listdir(directory)
+                if name.lower().endswith(DETECTION_IMAGE_EXTENSIONS)
+            ]
+        except OSError:
+            return []
 
     def open_history_data(self):
         """选择并预览历史表格/图片文件。"""
@@ -1982,6 +2092,9 @@ class OCRApp(QMainWindow):
             self.motion_worker.wait()
         if self.chip_preview_worker is not None and self.chip_preview_worker.isRunning():
             self.chip_preview_worker.wait()
+        if self.debug_worker is not None and self.debug_worker.isRunning():
+            self.debug_worker.stop()
+            self.debug_worker.wait()
         if self.camera_worker:
             self.camera_worker.stop()
             self.camera_worker.wait()

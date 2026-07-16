@@ -214,7 +214,10 @@ class ControlWorker(QThread):
                     self.target_m, self.target_a, self.img_dir)
 
         # 过滤 + 按文件名中的数字排序（例如 "1.jpg", "2.jpg", ..., "21.jpg"）
-        files = [f for f in os.listdir(self.img_dir) if f.lower().endswith((".png", ".jpg"))]
+        files = [
+            f for f in os.listdir(self.img_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
+        ]
         files.sort(key=lambda name: int("".join(filter(str.isdigit, name)) or 0))
         logger.info("找到 %d 张图片: %s", len(files), files)
 
