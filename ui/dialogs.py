@@ -77,6 +77,7 @@ class TemplateConfirmDialog(QDialog):
             """
         )
         self.detected_texts = list(detected_texts or [])
+        self.text_edits = []
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -86,7 +87,7 @@ class TemplateConfirmDialog(QDialog):
         title.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700;")
         layout.addWidget(title)
 
-        tips = QLabel("请选择当前模板对应的标准芯片字符；可选择一行或多行，检测时所选行必须全部命中。")
+        tips = QLabel("请确认当前模板对应的标准芯片字符；每一行都可以手动修改，可选择一行或多行，检测时所选行必须全部命中。")
         tips.setStyleSheet("color: #FFD60A; font-size: 13px; line-height: 1.5;")
         tips.setWordWrap(True)
         layout.addWidget(tips)
@@ -113,7 +114,7 @@ class TemplateConfirmDialog(QDialog):
         )
         layout.addWidget(self.raw_text_display)
 
-        model_label = QLabel("模板字符（可多选）:")
+        model_label = QLabel("模板字符（勾选并编辑）:")
         model_label.setStyleSheet("color: #a1a1a6; font-size: 13px; margin-top: 6px;")
         layout.addWidget(model_label)
 
@@ -143,29 +144,72 @@ class TemplateConfirmDialog(QDialog):
             }
             """
         )
+        edit_style = (
+            """
+            QLineEdit {
+                color: #ffffff;
+                background-color: #222226;
+                border: 1px solid #555559;
+                border-radius: 6px;
+                padding: 6px 8px;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QLineEdit:focus {
+                border: 2px solid #007AFF;
+            }
+            """
+        )
         seen = set()
         for text in self.detected_texts:
             text = str(text).strip()
             if not text or text in seen:
                 continue
-            checkbox = QCheckBox(text.replace("&", "&&"))
-            checkbox.setProperty("template_text", text)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+
+            checkbox = QCheckBox()
             checkbox.setStyleSheet(checkbox_style)
             checkbox.setChecked(
                 (detected_model and text == detected_model)
                 or (not detected_model and not self.text_checkboxes)
             )
-            checkbox_layout.addWidget(checkbox)
+            row_layout.addWidget(checkbox)
+
+            edit = QLineEdit(text)
+            edit.setPlaceholderText("请输入标准模板字符")
+            edit.setStyleSheet(edit_style)
+            row_layout.addWidget(edit, 1)
+
+            checkbox_layout.addWidget(row)
             self.text_checkboxes.append(checkbox)
+            self.text_edits.append(edit)
             seen.add(text)
 
         if self.text_checkboxes and not any(checkbox.isChecked() for checkbox in self.text_checkboxes):
             self.text_checkboxes[0].setChecked(True)
 
         if not self.text_checkboxes:
-            empty_label = QLabel("未识别到可选择的模板字符")
-            empty_label.setStyleSheet("color: #ff453a; font-size: 13px;")
-            checkbox_layout.addWidget(empty_label)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+
+            checkbox = QCheckBox()
+            checkbox.setStyleSheet(checkbox_style)
+            checkbox.setChecked(True)
+            row_layout.addWidget(checkbox)
+
+            edit = QLineEdit()
+            edit.setPlaceholderText("未识别到文本，请手动输入标准模板字符")
+            edit.setStyleSheet(edit_style)
+            row_layout.addWidget(edit, 1)
+
+            checkbox_layout.addWidget(row)
+            self.text_checkboxes.append(checkbox)
+            self.text_edits.append(edit)
         checkbox_layout.addStretch()
 
         self.text_scroll = QScrollArea()
@@ -232,8 +276,8 @@ class TemplateConfirmDialog(QDialog):
     def get_selected_texts(self):
         """用户勾选的标准模板字符；后续检测要求这些行全部命中。"""
         selected = []
-        for checkbox in self.text_checkboxes:
-            text = str(checkbox.property("template_text") or checkbox.text()).strip()
+        for checkbox, edit in zip(self.text_checkboxes, self.text_edits):
+            text = edit.text().strip()
             if checkbox.isChecked() and text and text not in selected:
                 selected.append(text)
         return selected

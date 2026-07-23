@@ -53,6 +53,8 @@ class CameraWorker(QThread):
         self.binary_enabled = False
         self.retry_interval_ms = 1000
         self.max_read_failures_before_reopen = 30
+        self._open_failure_logged = False
+        self._read_failure_logged = False
 
     @staticmethod
     def _to_gray_bgr(frame):
@@ -115,7 +117,9 @@ class CameraWorker(QThread):
             if self.cap is None:
                 self.cap = self._open_camera()
                 if self.cap is None:
-                    logger.warning("摄像头 %s 打开失败，将继续重试", self.camera_id)
+                    if not self._open_failure_logged:
+                        logger.warning("摄像头 %s 打开失败，将继续后台重试", self.camera_id)
+                        self._open_failure_logged = True
                     self.status_changed.emit("无摄像头信号，正在重试...")
                     self.msleep(self.retry_interval_ms)
                     continue
@@ -124,12 +128,15 @@ class CameraWorker(QThread):
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
                 consecutive_failures = 0
+                self._open_failure_logged = False
+                self._read_failure_logged = False
                 logger.info("摄像头 %s 打开成功", self.camera_id)
                 self.status_changed.emit("")
 
             ret, frame = self.cap.read()
             if ret:
                 consecutive_failures = 0
+                self._read_failure_logged = False
                 # 保存原始 BGR 帧（翻转前），供实时识别线程直接读取做 OCR
                 self.current_raw_frame_bgr = frame.copy()
                 display_frame = self._apply_image_mode(self.current_raw_frame_bgr)
@@ -145,11 +152,13 @@ class CameraWorker(QThread):
             else:
                 consecutive_failures += 1
                 if consecutive_failures >= self.max_read_failures_before_reopen:
-                    logger.warning(
-                        "摄像头 %s 连续读帧失败 %d 次，释放后重新打开",
-                        self.camera_id,
-                        consecutive_failures,
-                    )
+                    if not self._read_failure_logged:
+                        logger.warning(
+                            "摄像头 %s 连续读帧失败 %d 次，释放后后台重连",
+                            self.camera_id,
+                            consecutive_failures,
+                        )
+                        self._read_failure_logged = True
                     self.status_changed.emit("无摄像头信号，正在重连...")
                     self.cap.release()
                     self.cap = None

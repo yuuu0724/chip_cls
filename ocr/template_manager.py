@@ -76,14 +76,14 @@ class TemplateManager:
             print(f"保存模板失败: {e}")
             return False
 
-    def recognize_template_image(self, image_path):
+    def recognize_template_image(self, image_path, target_angle=None):
         """只做参考图 OCR，不立即保存模板。
 
         新增模板流程需要用户从 OCR 结果中选择标准芯片型号；因此识别和保存
         必须拆开，避免未确认型号时污染 ``templates.json``。
         """
         try:
-            result = self.engine.predict_image(image_path)
+            result = self.engine.predict_image(image_path, target_angle=target_angle)
             self.last_error = result.get("status", "")
 
             if str(result.get("status", "")).startswith("error"):
@@ -95,7 +95,7 @@ class TemplateManager:
                     "error": self.last_error,
                 }
 
-            detected_angle = int(result.get("angle", 0) or 0)
+            detected_angle = int(target_angle if target_angle is not None else result.get("angle", 0) or 0)
             detected_texts = [
                 str(text) for text in (result.get("all_texts") or result.get("texts", []))
             ]

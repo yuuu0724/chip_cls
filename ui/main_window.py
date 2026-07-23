@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -1541,23 +1542,43 @@ class OCRApp(QMainWindow):
                     # 临时文件已被占用/删过都无所谓，静默跳过
                     pass
 
-    def _recognize_reference_image(self, file_path):
-        return self.services.template_manager.recognize_template_image(file_path)
+    def _ask_reference_angle(self):
+        angle, ok = QInputDialog.getItem(
+            self,
+            "参考图片角度",
+            "请选择当前参考图片的标准角度：",
+            ["0", "270"],
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        return int(angle)
+
+    def _recognize_reference_image(self, file_path, target_angle):
+        return self.services.template_manager.recognize_template_image(
+            file_path,
+            target_angle=target_angle,
+        )
 
     def _process_reference_image(self, file_path):
         """处理参考图片。
 
         流程：
-        1. 调 `template_manager.add_template_from_image` 做 OCR，拿到
-           `(detected_model, detected_angle, success)`。
-        2. 成功则弹 `TemplateConfirmDialog` 让用户校对型号/角度。
-        3. 用户若改过参数，就把旧模板删掉、保存新模板。
-        4. 同步更新 UI 和当前料盘里的 model/angle 字段。
+        1. 先由用户输入参考图片角度（当前演示只支持 0/270）。
+        2. 按该角度把芯片转成 0 度后 OCR。
+        3. 成功则弹 `TemplateConfirmDialog` 让用户校对型号字符。
+        4. 用户确认后保存新模板。
+        5. 同步更新 UI 和当前料盘里的 model/angle 字段。
         """
-        recognized = self._recognize_reference_image(file_path)
+        manual_angle = self._ask_reference_angle()
+        if manual_angle is None:
+            return
+
+        recognized = self._recognize_reference_image(file_path, manual_angle)
         success = recognized.get("success")
         detected_model = recognized.get("detected_model", "")
-        detected_angle = recognized.get("detected_angle", 0)
+        detected_angle = manual_angle
         detected_texts = recognized.get("detected_texts", [])
 
         if success:
@@ -1568,9 +1589,12 @@ class OCRApp(QMainWindow):
                 existing_models=self.services.template_manager.list_all_templates(),
                 parent=self,
             )
+            if hasattr(dialog, "angle_spinbox"):
+                dialog.angle_spinbox.setEnabled(False)
+                dialog.angle_spinbox.setToolTip("参考图片角度已在 OCR 前确认，保存时固定使用该角度。")
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 final_model = dialog.get_model_name()
-                final_angle = dialog.get_angle()
+                final_angle = manual_angle
                 selected_texts = dialog.get_selected_texts()
                 tray_id = self.tray_combo.currentData()
 
@@ -1994,6 +2018,7 @@ class OCRApp(QMainWindow):
             slot_order=self._current_slot_order,
             min_retry_rounds=app_config.get("live_min_retry_rounds", 3),
             max_retry_rounds=app_config.get("live_max_retry_rounds", 6),
+            capture_settle_ms=app_config.get("live_capture_settle_ms", 800),
             mode="auto",
         )
         self.live_worker.slot_recognized.connect(self.update_slot_ui)

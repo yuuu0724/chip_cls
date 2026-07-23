@@ -120,7 +120,7 @@ class ControlWorker(QThread):
     @staticmethod
     def _format_texts_with_scores(result):
         parts = []
-        for item in result.get("items", []) or []:
+        for item in result.get("all_items") or result.get("items", []) or []:
             text = str(item.get("text", "")).strip()
             if not text:
                 continue

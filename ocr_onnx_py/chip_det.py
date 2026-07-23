@@ -166,14 +166,14 @@ class ChipDetector:
     def detect(self, image: np.ndarray) -> list[dict]:
         src_h, src_w = image.shape[:2]
         input_tensor, scale, pad_x, pad_y = self.preprocess(image)
-        self.logger.info(
+        self.logger.debug(
             "chip image_shape=%s input_tensor_shape=%s",
             image.shape,
             input_tensor.shape,
         )
         outputs = self.session.run(None, {self.input_name: input_tensor})
         output = np.asarray(outputs[0])
-        self.logger.info("chip raw_output_shape=%s", output.shape)
+        self.logger.debug("chip raw_output_shape=%s", output.shape)
         results = self._parse_predictions(output, scale, pad_x, pad_y, src_w, src_h)
-        self.logger.info("chip post_boxes=%d", len(results))
+        self.logger.debug("chip post_boxes=%d", len(results))
         return results

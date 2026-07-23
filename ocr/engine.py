@@ -87,7 +87,7 @@ class OCREngine:
     过滤阈值（产品调参）
     --------------------
     - ``score > 0.5``：识别结果最低置信度
-    - ``len(text) > 2``：文本长度下限（太短多半是噪声）
+    - 文本长度不再设下限：短字符也保留给业务层判断
     - ``max_ocr_boxes = 4``：每张图最多送几个候选框进识别器
     - ``max_return_texts = 2``：最多返回几条识别文本
 
@@ -115,11 +115,13 @@ class OCREngine:
         # 检测/识别相关阈值，见类 docstring
         self.det_resize_long = 960
         self.det_max_candidates = 100
-        self.max_ocr_boxes = 4
-        self.max_return_texts = 2
-        self.min_rec_score = 0.90
+        self.max_ocr_boxes = 6
+        self.max_return_texts = 4
+        self.min_rec_score = 0.8
         self.center_chip_require_center_inside_bbox = True
         self.center_chip_inside_margin_px = 5
+        self.ocr_roi_input_mode = "raw"
+        self.ocr_roi_preprocess_config = self._default_ocr_roi_preprocess_config()
         try:
             from data.config_manager import ConfigManager
 
@@ -129,6 +131,12 @@ class OCREngine:
             )
             self.center_chip_inside_margin_px = int(
                 app_config.get("center_chip_inside_margin_px", 5)
+            )
+            self.ocr_roi_input_mode = self._normalize_ocr_roi_input_mode(
+                app_config.get("ocr_roi_input_mode", "raw")
+            )
+            self.ocr_roi_preprocess_config = self._normalize_ocr_roi_preprocess_config(
+                app_config.get("ocr_roi_preprocess_config")
             )
         except Exception as e:
             logger.warning("读取中心芯片判定配置失败，使用默认值: %s", e)
@@ -207,8 +215,12 @@ class OCREngine:
 
         # 三个 ONNX session：det/cls/rec
         detector = TextDetector(str(self.model_dir / "det" / "inference.onnx"))
-        detector.resize_long = self.det_resize_long
-        detector.postprocess.max_candidates = self.det_max_candidates
+        if hasattr(detector, "resize_long"):
+            detector.resize_long = self.det_resize_long
+        if hasattr(detector, "postprocess"):
+            detector.postprocess.max_candidates = self.det_max_candidates
+        if hasattr(detector, "max_candidates"):
+            detector.max_candidates = self.det_max_candidates
         classifier = TextClassifier(str(self.model_dir / "cls" / "inference.onnx"))
         recognizer = TextRecognizer(
             model_path=str(self.model_dir / "rec" / "inference.onnx"),
@@ -276,6 +288,26 @@ class OCREngine:
         adjusted[:, 0] += offset_x
         adjusted[:, 1] += offset_y
         return adjusted
+
+    def _normalize_input_image(self, image):
+        """Accept gray/BGR/BGRA images and normalize to BGR for ONNX models."""
+        image_shape = getattr(image, "shape", None)
+        if image_shape is None or len(image_shape) < 2:
+            raise ValueError(f"Invalid image shape: {image_shape}")
+
+        if image.ndim == 2:
+            return self.cv2.cvtColor(image, self.cv2.COLOR_GRAY2BGR)
+
+        if image.ndim == 3:
+            channels = image.shape[2]
+            if channels == 1:
+                return self.cv2.cvtColor(image, self.cv2.COLOR_GRAY2BGR)
+            if channels == 3:
+                return image
+            if channels == 4:
+                return self.cv2.cvtColor(image, self.cv2.COLOR_BGRA2BGR)
+
+        raise ValueError(f"Unsupported image shape: {image_shape}")
 
     def _detect_center_chip_candidates(self, image, log_details=True):
         """检测芯片框，并标记离图像中心最近的候选。"""
@@ -360,8 +392,10 @@ class OCREngine:
     def detect_chip_preview(self, image):
         """给摄像头预览使用的芯片检测结果，不参与 OCR 文本判定。"""
         try:
+            self._ensure_backend()
             if image is None:
                 return {"chips": [], "selected": None, "status": "error: image is None"}
+            image = self._normalize_input_image(image)
             result = self._detect_center_chip_candidates(image, log_details=False)
             if result is None:
                 h, w = image.shape[:2]
@@ -445,6 +479,43 @@ class OCREngine:
                 logger.warning("芯片 ROI 裁剪图保存失败: %s", output_path)
         except Exception as e:
             logger.warning("芯片 ROI 裁剪图保存异常: %s", e)
+
+    def _save_ocr_roi_processed_preview(self, image, bbox):
+        """保存进入 det/rec 前的 OCR ROI 处理后图像。"""
+        try:
+            output_dir = self.resource_root / "results" / "ocr_roi_processed"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            bbox_text = "_".join(str(int(v)) for v in bbox)
+            output_path = output_dir / f"ocr_roi_processed_{timestamp}_{bbox_text}.png"
+            ok = self.cv2.imwrite(str(output_path), image)
+            if ok:
+                logger.info("OCR ROI 处理后图像已保存: %s", output_path)
+            else:
+                logger.warning("OCR ROI 处理后图像保存失败: %s", output_path)
+        except Exception as e:
+            logger.warning("OCR ROI 处理后图像保存异常: %s", e)
+
+    def _save_ocr_det_crops(self, raw_results, angle):
+        """保存 det 模型裁剪出的文字候选图像。"""
+        try:
+            output_dir = self.resource_root / "results" / "ocr_det_crops"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            saved_count = 0
+            for index, item in enumerate(raw_results, start=1):
+                crop = item.get("crop")
+                if crop is None or getattr(crop, "size", 0) == 0:
+                    continue
+                output_path = output_dir / f"ocr_det_crop_{timestamp}_angle{int(angle):03d}_{index:02d}.png"
+                if self.cv2.imwrite(str(output_path), crop):
+                    saved_count += 1
+                else:
+                    logger.warning("OCR det 裁剪图保存失败: %s", output_path)
+            if saved_count:
+                logger.info("OCR det 裁剪图已保存 %d 张: %s", saved_count, output_dir)
+        except Exception as e:
+            logger.warning("OCR det 裁剪图保存异常: %s", e)
 
     @staticmethod
     def _parse_angle(label):
@@ -622,34 +693,302 @@ class OCREngine:
         try:
             self._ensure_backend()
             if image is None:
-                return {"angle": -1, "texts": [], "status": "error: image is None"}
+                return {
+                    "angle": -1,
+                    "texts": [],
+                    "all_texts": [],
+                    "all_items": [],
+                    "items": [],
+                    "status": "error: image is None",
+                }
+            image = self._normalize_input_image(image)
             return self._predict_core(image, target_angle=target_angle)
         except ModuleNotFoundError as e:
-            return {"angle": -1, "texts": [], "status": f"error: missing package {e.name}"}
+            return {
+                "angle": -1,
+                "texts": [],
+                "all_texts": [],
+                "all_items": [],
+                "items": [],
+                "status": f"error: missing package {e.name}",
+            }
         except Exception as e:
-            return {"angle": -1, "texts": [], "status": f"error: {e}"}
+            return {
+                "angle": -1,
+                "texts": [],
+                "all_texts": [],
+                "all_items": [],
+                "items": [],
+                "status": f"error: {e}",
+            }
+
+    def _candidate_angles_from_classifier(self, roi_image):
+        """使用 cls 方向模型检测 ROI 角度，只返回一个候选方向。"""
+        allowed_angles = {0, 90, 180, 270}
+        try:
+            cls_result = self.classifier.predict(roi_image)
+            label = str(cls_result.get("label", "")).strip()
+            angle = self._parse_angle(label) % 360
+            score = float(cls_result.get("score", 0.0) or 0.0)
+        except Exception as e:
+            logger.warning("OCR 方向分类失败，使用 0° 进行识别: %s", e)
+            return [0], {
+                "status": "error",
+                "label": "0",
+                "angle": 0,
+                "score": 0.0,
+                "error": str(e),
+            }
+
+        if angle not in allowed_angles:
+            logger.warning("OCR 方向分类结果无效，使用 0° 进行识别: label=%r angle=%s", label, angle)
+            return [0], {
+                "status": "invalid",
+                "label": label,
+                "angle": 0,
+                "score": score,
+            }
+
+        logger.info("OCR 方向分类完成 label=%s angle=%d score=%.4f", label, angle, score)
+        return [angle], {
+            "status": "success",
+            "label": label,
+            "angle": angle,
+            "score": score,
+        }
 
     @staticmethod
-    def _candidate_angles_for_target(target_angle):
-        """按用户模板角度生成检测候选方向；未传目标角度时保留四方向。"""
-        if target_angle is None:
-            return [0, 90, 180, 270]
+    def _normalize_ocr_roi_input_mode(value):
+        mode = str(value or "raw").strip().lower()
+        if mode in {"raw", "gray", "binary"}:
+            return mode
+        logger.warning("未知 OCR ROI 输入模式 %r，回退为 raw", value)
+        return "raw"
+
+    @staticmethod
+    def _default_ocr_roi_preprocess_config():
+        return {
+            "schema_version": 1,
+            "enabled": True,
+            "grayscale": True,
+            "invert": False,
+            "brightness": -96,
+            "contrast": 1.43,
+            "gamma": 0.81,
+            "sharpen": 0.31,
+            "filter_enabled": True,
+            "filter_type": "非局部均值去噪",
+            "filter_kernel": 3,
+            "filter_strength": 30.0,
+            "clahe_enabled": False,
+            "binary_enabled": False,
+            "remove_small_enabled": False,
+            "morphology_enabled": False,
+            "canny_enabled": False,
+        }
+
+    @classmethod
+    def _normalize_ocr_roi_preprocess_config(cls, value):
+        config = cls._default_ocr_roi_preprocess_config()
+        if isinstance(value, dict):
+            config.update(value)
+        return config
+
+    @staticmethod
+    def _config_bool(config, key, default=False):
+        value = config.get(key, default)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "是", "启用"}
+        return bool(value)
+
+    @staticmethod
+    def _odd_kernel(value, default=3):
+        try:
+            kernel = int(value)
+        except (TypeError, ValueError):
+            kernel = default
+        kernel = max(1, kernel)
+        if kernel % 2 == 0:
+            kernel += 1
+        return kernel
+
+    def _clip_uint8(self, image):
+        return self.np.clip(image, 0, 255).astype(self.np.uint8)
+
+    @staticmethod
+    def _float_config(config, key, default):
+        try:
+            return float(config.get(key, default) or default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _apply_gamma(self, image, gamma):
+        try:
+            gamma = float(gamma)
+        except (TypeError, ValueError):
+            gamma = 1.0
+        if gamma <= 0 or abs(gamma - 1.0) < 1e-6:
+            return image
+
+        table = self.np.array(
+            [((index / 255.0) ** gamma) * 255 for index in range(256)],
+            dtype=self.np.uint8,
+        )
+        return self.cv2.LUT(image, table)
+
+    def _apply_ocr_roi_preprocess(self, roi_image):
+        config = self.ocr_roi_preprocess_config or {}
+        if not self._config_bool(config, "enabled", False):
+            return roi_image
+
+        image = roi_image
+        if self._config_bool(config, "grayscale", True):
+            image = self.cv2.cvtColor(image, self.cv2.COLOR_BGR2GRAY)
+        else:
+            image = image.copy()
+
+        if self._config_bool(config, "invert", False):
+            image = self.cv2.bitwise_not(image)
+
+        brightness = float(config.get("brightness", 0) or 0)
+        contrast = float(config.get("contrast", 1.0) or 1.0)
+        image = self._clip_uint8(image.astype(self.np.float32) * contrast + brightness)
+        image = self._apply_gamma(image, config.get("gamma", 1.0))
+
+        sharpen = float(config.get("sharpen", 0.0) or 0.0)
+        if sharpen > 0:
+            blurred = self.cv2.GaussianBlur(image, (0, 0), 1.0)
+            image = self.cv2.addWeighted(image, 1.0 + sharpen, blurred, -sharpen, 0)
+
+        filter_type = str(config.get("filter_type", "") or "")
+        if self._config_bool(config, "filter_enabled", False) and "非局部均值" in filter_type:
+            strength = float(config.get("filter_strength", 30.0) or 30.0)
+            kernel = self._odd_kernel(config.get("filter_kernel", 3), default=3)
+            search_window = max(7, kernel * 7)
+            if search_window % 2 == 0:
+                search_window += 1
+            if image.ndim == 2:
+                image = self.cv2.fastNlMeansDenoising(
+                    image,
+                    None,
+                    h=strength,
+                    templateWindowSize=kernel,
+                    searchWindowSize=search_window,
+                )
+            else:
+                image = self.cv2.fastNlMeansDenoisingColored(
+                    image,
+                    None,
+                    h=strength,
+                    hColor=strength,
+                    templateWindowSize=kernel,
+                    searchWindowSize=search_window,
+                )
+
+        if image.ndim == 2:
+            image = self.cv2.cvtColor(image, self.cv2.COLOR_GRAY2BGR)
+
+        logger.info(
+            "OCR ROI 图像处理完成 shape=%s grayscale=%s brightness=%s contrast=%s gamma=%s sharpen=%s filter=%s kernel=%s strength=%s",
+            image.shape,
+            self._config_bool(config, "grayscale", True),
+            config.get("brightness", 0),
+            config.get("contrast", 1.0),
+            config.get("gamma", 1.0),
+            config.get("sharpen", 0.0),
+            config.get("filter_type", ""),
+            config.get("filter_kernel", 3),
+            config.get("filter_strength", 30.0),
+        )
+        return image
+
+    def _describe_ocr_roi_processing(self):
+        config = self.ocr_roi_preprocess_config or {}
+        if self._config_bool(config, "enabled", False):
+            steps = []
+            if self._config_bool(config, "grayscale", True):
+                steps.append("灰度化")
+            if self._config_bool(config, "invert", False):
+                steps.append("反色")
+
+            brightness = self._float_config(config, "brightness", 0.0)
+            contrast = self._float_config(config, "contrast", 1.0)
+            if abs(brightness) > 1e-6 or abs(contrast - 1.0) > 1e-6:
+                steps.append(f"亮度 {brightness:g} / 对比度 {contrast:g}")
+
+            gamma = self._float_config(config, "gamma", 1.0)
+            if gamma > 0 and abs(gamma - 1.0) > 1e-6:
+                steps.append(f"Gamma {gamma:g}")
+
+            sharpen = self._float_config(config, "sharpen", 0.0)
+            if sharpen > 0:
+                steps.append(f"锐化 {sharpen:g}")
+
+            filter_type = str(config.get("filter_type", "") or "")
+            if self._config_bool(config, "filter_enabled", False) and "非局部均值" in filter_type:
+                kernel = self._odd_kernel(config.get("filter_kernel", 3), default=3)
+                strength = self._float_config(config, "filter_strength", 30.0)
+                steps.append(f"{filter_type} kernel={kernel} strength={strength:g}")
+
+            return steps or ["启用图像处理但未配置有效步骤"]
+
+        mode = self.ocr_roi_input_mode
+        if mode == "gray":
+            return ["简易灰度化"]
+        if mode == "binary":
+            return ["简易灰度化", "Otsu 二值化"]
+        return []
+
+    def _prepare_ocr_roi_input(self, roi_image):
+        """按配置处理 OCR ROI，并保持三通道 BGR 输入。"""
+        if self._config_bool(self.ocr_roi_preprocess_config, "enabled", False):
+            try:
+                return self._apply_ocr_roi_preprocess(roi_image)
+            except Exception as e:
+                logger.warning("OCR ROI 图像处理失败，回退简易模式: %s", e)
+
+        mode = self.ocr_roi_input_mode
+        if mode == "raw":
+            return roi_image
 
         try:
-            normalized = int(target_angle) % 360
+            gray = self.cv2.cvtColor(roi_image, self.cv2.COLOR_BGR2GRAY)
+            if mode == "binary":
+                _, gray = self.cv2.threshold(
+                    gray,
+                    0,
+                    255,
+                    self.cv2.THRESH_BINARY + self.cv2.THRESH_OTSU,
+                )
+            return self.cv2.cvtColor(gray, self.cv2.COLOR_GRAY2BGR)
+        except Exception as e:
+            logger.warning("OCR ROI 输入预处理失败，回退原图: mode=%s error=%s", mode, e)
+            return roi_image
+
+    @staticmethod
+    def _candidate_angles_for_manual_reference(target_angle):
+        """演示模式：按人工参考角度决定 OCR 归一化方向。"""
+        try:
+            angle = int(target_angle) % 360
         except (TypeError, ValueError):
-            return [0, 90, 180, 270]
+            logger.warning("人工参考角度无效，回退测试 0/270 两方向: target_angle=%r", target_angle)
+            return [0, 270]
 
-        if normalized not in (0, 90, 180, 270):
-            return [0, 90, 180, 270]
+        if angle in (0, 270):
+            return [angle]
 
-        opposite = (normalized + 180) % 360
-        return [normalized, opposite]
+        logger.warning("人工参考角度不是 0/270，回退测试 0/270 两方向: target_angle=%r", target_angle)
+        return [0, 270]
 
     def _recognize_rotated_chip_roi(self, roi_image, roi_bbox, angle, image_shape):
         """对单个旋转方向的中心芯片 ROI 跑 OCR，并返回可排序的结果。"""
         ocr_image = self._rotate_to_upright(roi_image, angle)
-        logger.info("方向候选 %d° OCR 输入 ROI shape=%s", angle, ocr_image.shape)
+        logger.info(
+            "方向候选 %d° OCR 输入 ROI shape=%s mode=%s",
+            angle,
+            ocr_image.shape,
+            self.ocr_roi_input_mode,
+        )
 
         raw_results = self.detector.detect_and_crop(ocr_image)
         logger.info("方向候选 %d° OCR 检测候选框数量=%d", angle, len(raw_results))
@@ -670,9 +1009,12 @@ class OCREngine:
                 box_points,
             )
 
+        if raw_results:
+            self._save_ocr_det_crops(raw_results, angle)
+
         if not raw_results:
             logger.info("方向候选 %d° OCR 检测未返回文本框，使用该方向 ROI 作为识别候选", angle)
-            roi_h, roi_w = roi_image.shape[:2]
+            roi_h, roi_w = ocr_image.shape[:2]
             x1, y1, _, _ = roi_bbox
             raw_results = [{
                 "crop": ocr_image,
@@ -695,6 +1037,7 @@ class OCREngine:
 
         valid_texts = []
         fallback_texts = []
+        all_items = []
         visual_items = []
         raw_scores = []
         valid_scores = []
@@ -741,6 +1084,12 @@ class OCREngine:
                 if not clean_text:
                     continue
 
+                all_items.append({
+                    "text": clean_text,
+                    "score": float(score),
+                    "box": box.astype(float).tolist() if box is not None else None,
+                })
+
                 if not self._is_chip_text(clean_text):
                     logger.info("方向候选 %d° OCR 候选非芯片字符，已过滤 text=%r", angle, clean_text)
                     continue
@@ -774,25 +1123,33 @@ class OCREngine:
                     len(clean_text),
                 )
 
-                if len(clean_text) > 2 and clean_text not in valid_texts:
+                if clean_text not in valid_texts:
                     valid_texts.append(clean_text)
 
-        valid_texts = valid_texts[: self.max_return_texts]
+        valid_line_count = len(valid_scores)
+        total_valid_score = sum(valid_scores)
+        best_valid_score = max(valid_scores) if valid_scores else 0.0
         best_raw_score = max(raw_scores) if raw_scores else 0.0
-        avg_valid_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        avg_valid_score = total_valid_score / valid_line_count if valid_scores else 0.0
+        valid_texts = valid_texts[: self.max_return_texts]
         score_tuple = (
-            1 if valid_texts else 0,
+            1 if valid_line_count else 0,
+            total_valid_score,
             avg_valid_score,
-            len(valid_texts),
+            best_valid_score,
+            valid_line_count,
             best_raw_score,
             len(fallback_texts),
         )
         logger.info(
-            "方向候选 %d° OCR 汇总 texts=%s fallback=%s avg_valid=%.4f best_raw=%.4f score_key=%s",
+            "方向候选 %d° OCR 汇总 texts=%s fallback=%s total_valid=%.4f avg_valid=%.4f best_valid=%.4f valid_lines=%d best_raw=%.4f score_key=%s",
             angle,
             valid_texts,
             fallback_texts,
+            total_valid_score,
             avg_valid_score,
+            best_valid_score,
+            valid_line_count,
             best_raw_score,
             score_tuple,
         )
@@ -801,6 +1158,7 @@ class OCREngine:
             "angle": int(angle),
             "texts": valid_texts,
             "all_texts": fallback_texts,
+            "all_items": all_items,
             "items": visual_items,
             "box_coordinate": "original",
             "image_shape": [int(image_shape[0]), int(image_shape[1])],
@@ -808,6 +1166,9 @@ class OCREngine:
             "score_key": score_tuple,
             "orientation_scores": {
                 "valid_text_count": len(valid_texts),
+                "valid_line_count": valid_line_count,
+                "total_valid_score": total_valid_score,
+                "best_valid_score": best_valid_score,
                 "avg_valid_score": avg_valid_score,
                 "best_raw_score": best_raw_score,
                 "raw_text_count": len(fallback_texts),
@@ -816,7 +1177,7 @@ class OCREngine:
         }
 
     def _predict_core(self, image, target_angle=None):
-        """核心 OCR 流水线：只裁剪中心芯片 ROI，并从四个方向中选择置信度最高者。"""
+        """核心 OCR 流水线：只裁剪中心芯片 ROI，并按人工参考角度归一化后识别。"""
         h, w = image.shape[:2]
         chip_roi = self._select_center_chip_roi(image)
         if chip_roi is None:
@@ -825,6 +1186,7 @@ class OCREngine:
                 "angle": 0,
                 "texts": [],
                 "all_texts": [],
+                "all_items": [],
                 "items": [],
                 "box_coordinate": "original",
                 "image_shape": [int(h), int(w)],
@@ -839,6 +1201,7 @@ class OCREngine:
                 "angle": 0,
                 "texts": [],
                 "all_texts": [],
+                "all_items": [],
                 "items": [],
                 "box_coordinate": "original",
                 "image_shape": [int(h), int(w)],
@@ -847,19 +1210,38 @@ class OCREngine:
 
         roi_bbox = chip_roi["bbox"]
         roi_image = chip_roi["crop"]
-        candidate_angles = self._candidate_angles_for_target(target_angle)
+        candidate_angles = self._candidate_angles_for_manual_reference(target_angle)
+        orientation_result = {
+            "status": "manual_reference",
+            "label": "",
+            "angle": candidate_angles[0] if len(candidate_angles) == 1 else None,
+            "score": 0.0,
+            "target_angle": target_angle,
+            "reason": "演示模式按人工参考角度归一化：0 不旋转，270 顺时针旋转 90 度",
+        }
+        ocr_roi_image = self._prepare_ocr_roi_input(roi_image)
+        self._save_ocr_roi_processed_preview(ocr_roi_image, roi_bbox)
+        preprocess_steps = self._describe_ocr_roi_processing()
         logger.info(
-            "OCR 输入已裁剪为中心芯片 ROI bbox=%s shape=%s，将测试方向=%s",
+            "OCR 输入已裁剪为中心芯片 ROI bbox=%s shape=%s，处理后 shape=%s，人工参考角度=%s，将测试方向=%s",
             [int(v) for v in roi_bbox],
             roi_image.shape,
+            ocr_roi_image.shape,
+            target_angle,
             candidate_angles,
         )
+        if preprocess_steps:
+            logger.info("OCR ROI 已先做图像处理，再按人工参考角度归一化识别 steps=%s", preprocess_steps)
+        else:
+            logger.info("OCR ROI 未启用图像处理，使用原图按人工参考角度归一化识别")
 
         candidates = [
-            self._recognize_rotated_chip_roi(roi_image, roi_bbox, angle, (h, w))
+            self._recognize_rotated_chip_roi(ocr_roi_image, roi_bbox, angle, (h, w))
             for angle in candidate_angles
         ]
         selected = max(candidates, key=lambda item: item["score_key"])
+        selected["preprocess_steps"] = preprocess_steps
+        selected["orientation_result"] = orientation_result
         selected["orientation_candidates"] = [
             {
                 "angle": item["angle"],
@@ -872,11 +1254,12 @@ class OCREngine:
             for item in candidates
         ]
         logger.info(
-            "已选择方向候选 %d° 作为最终判断依据 texts=%s all_texts=%s score_key=%s",
+            "已选择方向候选 %d° 作为当前识别结果 texts=%s all_texts=%s score_key=%s preprocess_steps=%s",
             selected["angle"],
             selected["texts"],
             selected["all_texts"],
             selected["score_key"],
+            preprocess_steps,
         )
         selected.pop("score_key", None)
         return selected
@@ -892,10 +1275,31 @@ class OCREngine:
 
             image = self.cv2.imread(str(img_path))
             if image is None:
-                return {"angle": -1, "texts": [], "status": f"error: cannot read image: {img_path}"}
+                return {
+                    "angle": -1,
+                    "texts": [],
+                    "all_texts": [],
+                    "all_items": [],
+                    "items": [],
+                    "status": f"error: cannot read image: {img_path}",
+                }
 
             return self._predict_core(image, target_angle=target_angle)
         except ModuleNotFoundError as e:
-            return {"angle": -1, "texts": [], "status": f"error: missing package {e.name}"}
+            return {
+                "angle": -1,
+                "texts": [],
+                "all_texts": [],
+                "all_items": [],
+                "items": [],
+                "status": f"error: missing package {e.name}",
+            }
         except Exception as e:
-            return {"angle": -1, "texts": [], "status": f"error: {e}"}
+            return {
+                "angle": -1,
+                "texts": [],
+                "all_texts": [],
+                "all_items": [],
+                "items": [],
+                "status": f"error: {e}",
+            }

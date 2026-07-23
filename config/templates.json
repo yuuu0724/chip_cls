@@ -201,17 +201,16 @@
     "modelName": "822",
     "standardChipModel": "822",
     "ocrTexts": [
-      "822",
-      "1N5"
+      "822"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\822_20260710_160916.png",
-    "trayId": "演示3",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\822_20260723_114424.png",
+    "trayId": "JT822",
     "lightConfig": {
       "light1Voltage": 0.0,
       "light2Voltage": 0.0
     },
     "createdAt": "2026-05-29T14:09:26",
-    "updatedAt": "2026-07-10T16:09:16"
+    "updatedAt": "2026-07-23T11:44:24"
   },
   "JT.": {
     "angle": 180,
@@ -276,32 +275,33 @@
     "updatedAt": "2026-07-10T15:32:46"
   },
   "2DK360SU": {
-    "angle": 270,
+    "angle": 0,
     "description": "用户从图片手动确认的模板",
     "modelName": "2DK360SU",
     "standardChipModel": "2DK360SU",
     "ocrTexts": [
       "2DK360SU"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\2DK360SU_20260715_155511.jpg",
-    "trayId": "2DK360SU",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\2DK360SU_20260723_095316.jpg",
+    "trayId": "A0001",
     "lightConfig": {},
     "createdAt": "2026-07-10T15:39:26",
-    "updatedAt": "2026-07-15T15:55:11"
+    "updatedAt": "2026-07-23T09:53:16"
   },
   "ZA515": {
-    "angle": 0,
+    "angle": 90,
     "description": "用户从图片手动确认的模板",
     "modelName": "ZA515",
     "standardChipModel": "ZA515",
     "ocrTexts": [
-      "ZA515"
+      "ZA515",
+      "3NJNHB7"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\ZA515_20260715_160355.jpg",
-    "trayId": "2DK360SU",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\ZA515_20260720_205420.jpg",
+    "trayId": "A0001",
     "lightConfig": {},
     "createdAt": "2026-07-10T16:28:55",
-    "updatedAt": "2026-07-15T16:03:55"
+    "updatedAt": "2026-07-20T20:54:20"
   },
   "V70S": {
     "angle": 0,
@@ -327,11 +327,11 @@
       "81FS",
       "JT"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\81FS_20260710_164721.png",
-    "trayId": "252",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\81FS_20260720_113834.jpg",
+    "trayId": "A0001",
     "lightConfig": {},
     "createdAt": "2026-07-10T16:38:55",
-    "updatedAt": "2026-07-10T16:47:21"
+    "updatedAt": "2026-07-20T11:38:34"
   },
   "HCE1963A": {
     "angle": 0,
@@ -343,11 +343,11 @@
       "(3.3V)",
       "2215"
     ],
-    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\HCE1963A_20260715_210331.jpg",
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\HCE1963A_20260723_095109.jpg",
     "trayId": "A0001",
     "lightConfig": {},
     "createdAt": "2026-07-10T16:50:32",
-    "updatedAt": "2026-07-15T21:03:31"
+    "updatedAt": "2026-07-23T09:51:09"
   },
   "HDCR01050": {
     "angle": 90,
@@ -376,5 +376,90 @@
     "lightConfig": {},
     "createdAt": "2026-07-15T16:03:05",
     "updatedAt": "2026-07-15T16:03:05"
+  },
+  "O2DK360SU": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "O2DK360SU",
+    "standardChipModel": "O2DK360SU",
+    "ocrTexts": [
+      "O2DK360SU"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\O2DK360SU_20260717_114902.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-17T11:49:02",
+    "updatedAt": "2026-07-17T11:49:02"
+  },
+  "O2DK380S": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "O2DK380S",
+    "standardChipModel": "O2DK380S",
+    "ocrTexts": [
+      "O2DK380S"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\O2DK380S_20260717_120720.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-17T12:07:20",
+    "updatedAt": "2026-07-17T12:07:20"
+  },
+  "02K360SU": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "02K360SU",
+    "standardChipModel": "02K360SU",
+    "ocrTexts": [
+      "02K360SU"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\02K360SU_20260719_212416.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-19T21:24:16",
+    "updatedAt": "2026-07-19T21:24:16"
+  },
+  "4ZA515": {
+    "angle": 90,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "4ZA515",
+    "standardChipModel": "4ZA515",
+    "ocrTexts": [
+      "4ZA515",
+      "3NJNHB7"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\4ZA515_20260719_213433.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-19T21:34:33",
+    "updatedAt": "2026-07-19T21:34:33"
+  },
+  "2DK360Su": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "2DK360Su",
+    "standardChipModel": "2DK360Su",
+    "ocrTexts": [
+      "2DK360Su"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\2DK360Su_20260719_225842.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-19T22:58:42",
+    "updatedAt": "2026-07-19T22:58:42"
+  },
+  "22DK60SU": {
+    "angle": 270,
+    "description": "用户从图片手动确认的模板",
+    "modelName": "22DK60SU",
+    "standardChipModel": "22DK60SU",
+    "ocrTexts": [
+      "22DK60SU"
+    ],
+    "standardImagePath": "F:\\Data\\Project\\OCR-Proj\\chipocr\\config\\template_images\\22DK60SU_20260720_114831.jpg",
+    "trayId": "A0001",
+    "lightConfig": {},
+    "createdAt": "2026-07-20T11:48:31",
+    "updatedAt": "2026-07-20T11:48:31"
   }
 }

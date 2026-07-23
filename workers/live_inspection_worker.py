@@ -1,13 +1,11 @@
-"""实时逐槽位识别线程。
+"""实时逐槽位检测线程。
 
 工作流程（每个槽位）
 --------------------
 1. 若不是第一个槽位，发出 ``request_move_confirm`` 信号，等待 UI 自动移槽完成；
-2. 在约 1 秒内连续采集 3 帧摄像头图像，逐帧调用 OCR 引擎推理；
-3. 每轮采集三帧；至少采集 ``live_min_retry_rounds`` 轮，达到最少轮数后，
-   若本轮三帧识别结果（status）完全一致则进入下一槽位，最多采集
-   ``live_max_retry_rounds`` 轮；
-4. 将最终结果通过 ``slot_recognized`` 信号回到主线程更新 UI，
+2. 移动到位后静止等待 ``capture_settle_ms``，再从摄像头缓存抓取一帧；
+3. 所有槽位拍照完成后，在后台统一逐张调用 OCR 引擎推理；
+4. 将识别结果通过 ``slot_recognized`` 信号回到主线程更新 UI，
    UI 可在自动模式下先执行运动控制，再调用 ``confirm_move()``。
 
 模式
@@ -29,15 +27,14 @@ from ocr import MaterialController
 
 logger = logging.getLogger(__name__)
 
-# 每个槽位默认采集轮数范围（每轮3帧），可通过 app_config.json 覆盖
+# 旧的三帧一致参数保留为兼容入参；新流程每槽位只拍一张图，统一后台识别
 DEFAULT_MIN_RETRY_ROUNDS = 3
 DEFAULT_MAX_RETRY_ROUNDS = 6
-# 每帧间隔毫秒数；3帧合计约 1 秒
-_FRAME_INTERVAL_MS = 333
+DEFAULT_CAPTURE_SETTLE_MS = 800
 
 
 class LiveInspectionWorker(QThread):
-    """实时逐槽位识别线程。
+    """实时逐槽位检测线程。
 
     Signals
     -------
@@ -68,6 +65,7 @@ class LiveInspectionWorker(QThread):
         slot_order=None,
         min_retry_rounds=DEFAULT_MIN_RETRY_ROUNDS,
         max_retry_rounds=DEFAULT_MAX_RETRY_ROUNDS,
+        capture_settle_ms=DEFAULT_CAPTURE_SETTLE_MS,
         mode="auto",
         parent=None,
     ):
@@ -103,6 +101,7 @@ class LiveInspectionWorker(QThread):
             min_retry_rounds,
             max_retry_rounds,
         )
+        self.capture_settle_ms = self._normalize_capture_settle_ms(capture_settle_ms)
         self.display_slot_numbers = {
             slot_index: order_pos + 1
             for order_pos, slot_index in enumerate(self.slot_order)
@@ -146,6 +145,14 @@ class LiveInspectionWorker(QThread):
         min_rounds = max(1, min_rounds)
         max_rounds = max(min_rounds, max_rounds)
         return min_rounds, max_rounds
+
+    @staticmethod
+    def _normalize_capture_settle_ms(value):
+        try:
+            settle_ms = int(value)
+        except (TypeError, ValueError):
+            settle_ms = DEFAULT_CAPTURE_SETTLE_MS
+        return max(0, settle_ms)
 
     def _display_slot_number(self, slot_index):
         return self.display_slot_numbers.get(slot_index, slot_index + 1)
@@ -195,7 +202,7 @@ class LiveInspectionWorker(QThread):
     @staticmethod
     def _format_texts_with_scores(result):
         parts = []
-        for item in result.get("items", []) or []:
+        for item in result.get("all_items") or result.get("items", []) or []:
             text = str(item.get("text", "")).strip()
             if not text:
                 continue
@@ -210,136 +217,87 @@ class LiveInspectionWorker(QThread):
         texts = result.get("all_texts") or result.get("texts", [])
         return "|".join(str(text) for text in texts)
 
-    def _capture_and_infer(self):
-        """从 CameraWorker 读最新一帧并推理。
+    def _sleep_interruptibly(self, duration_ms, pause_message=None):
+        """可被暂停和停止打断的毫秒级等待。"""
+        waited_ms = 0
+        duration_ms = max(0, int(duration_ms))
+        while waited_ms < duration_ms and not self._stop_flag:
+            if pause_message:
+                self.status_message.emit(pause_message)
+            if not self._wait_if_paused():
+                return False
+            step_ms = min(100, duration_ms - waited_ms)
+            self.msleep(step_ms)
+            waited_ms += step_ms
+        return not self._stop_flag
+
+    def _capture_slot_frame(self, slot_index):
+        """移动到位并静止后，从 CameraWorker 读取一张槽位照片。"""
+        display_slot_no = self._display_slot_number(slot_index)
+        if self.capture_settle_ms > 0:
+            self.status_message.emit(
+                f"槽位 {display_slot_no} 已到位，静止 {self.capture_settle_ms} ms 后拍照..."
+            )
+            if not self._sleep_interruptibly(self.capture_settle_ms):
+                return None
+
+        frame = getattr(self.camera_worker, "current_frame_bgr", None)
+        if frame is None:
+            logger.warning("槽位 %02d 拍照失败：摄像头帧为空", display_slot_no)
+            return None
+        logger.info("槽位 %02d 已拍照 frame_shape=%s", display_slot_no, frame.shape)
+        return frame.copy()
+
+    def _infer_captured_frame(self, slot_index, source_frame):
+        """对已缓存照片执行 OCR 推理和业务判定。
 
         Returns
         -------
         tuple[str, str, dict]
             ``(status, color_key, result_dict)``。
-            若摄像头帧为空，直接返回识别失败。
         """
-        frame = getattr(self.camera_worker, "current_frame_bgr", None)
-        if frame is None:
-            logger.warning("摄像头帧为空，无法推理")
-            return "识别失败", "red", {"texts": [], "angle": 0, "status": "error: no frame"}
+        if source_frame is None:
+            return "识别失败", "red", {
+                "texts": [],
+                "all_texts": [],
+                "all_items": [],
+                "items": [],
+                "angle": 0,
+                "status": "error: no frame",
+                "reason": "拍照时摄像头帧为空",
+            }
 
-        source_frame = frame.copy()
         result = self.engine.predict_image_from_array(
-            source_frame,
+            source_frame.copy(),
             target_angle=self.target_a,
         )
-        result["_slot_source_frame_bgr"] = source_frame
         raw_status = str(result.get("status", ""))
-
         if raw_status.startswith("error"):
             status, color = "识别失败", "red"
         else:
             status, color = MaterialController.analyze_status(result, self.target_m, self.target_a)
-
         return status, color, result
-
-    def _infer_slot_with_consensus(self, slot_index):
-        """连续采集 3 帧推理，三帧结果一致则返回，否则重试。
-
-        至少采集 ``min_retry_rounds`` 轮，最多采集 ``max_retry_rounds`` 轮；
-        达到最少轮数后，若本轮 3 帧结果一致则返回；超出后强制取最后一帧结果，
-        防止单槽位无限阻塞。
-
-        Returns
-        -------
-        tuple[str, str, dict]
-            ``(status, color_key, result_dict)``。
-        """
-        last_results = []
-
-        for attempt in range(self.max_retry_rounds):
-            if self._stop_flag or not self._wait_if_paused():
-                break
-
-            round_results = []
-            for frame_idx in range(3):
-                if self._stop_flag or not self._wait_if_paused():
-                    break
-                self.status_message.emit(
-                    f"槽位 {self._display_slot_number(slot_index)} — 第 {attempt + 1} 轮第 {frame_idx + 1} 帧采集中..."
-                )
-                status, color, result = self._capture_and_infer()
-                round_results.append((status, color, result))
-                # 帧间间隔，合计约 1 秒
-                waited_ms = 0
-                while waited_ms < _FRAME_INTERVAL_MS and not self._stop_flag:
-                    if not self._wait_if_paused():
-                        break
-                    step_ms = min(100, _FRAME_INTERVAL_MS - waited_ms)
-                    self.msleep(step_ms)
-                    waited_ms += step_ms
-
-            if len(round_results) < 3:
-                # 被 stop 打断，不再重试
-                last_results = round_results
-                break
-
-            last_results = round_results
-            # 三帧 status 全一致才算稳定
-            statuses = [r[0] for r in round_results]
-            if len(set(statuses)) == 1:
-                logger.info(
-                    "槽位 %02d 第 %d/%d 轮连续3帧一致: %s",
-                    self._display_slot_number(slot_index),
-                    attempt + 1,
-                    self.max_retry_rounds,
-                    statuses[0],
-                )
-                if attempt + 1 >= self.min_retry_rounds:
-                    return round_results[0]
-                self.status_message.emit(
-                    f"槽位 {self._display_slot_number(slot_index)} 已稳定，继续采集至最少 {self.min_retry_rounds} 轮..."
-                )
-                continue
-
-            logger.info(
-                "槽位 %02d 第 %d 轮结果不一致: %s，重新采集",
-                self._display_slot_number(slot_index), attempt + 1, statuses,
-            )
-            self.status_message.emit(
-                f"槽位 {self._display_slot_number(slot_index)} 三帧不一致（{statuses}），重新采集..."
-            )
-
-        if self._stop_flag and last_results:
-            return last_results[0]
-
-        logger.warning(
-            "槽位 %02d 限定轮数内未获得稳定识别结果，标记为识别失败",
-            self._display_slot_number(slot_index),
-        )
-        return "识别失败", "red", {
-            "texts": [],
-            "all_texts": [],
-            "items": [],
-            "angle": 0,
-            "status": "error: consensus_timeout",
-            "reason": "限定轮数内未获得稳定识别结果",
-        }
 
     # ------------------------------------------------------------------
     # 线程主体
     # ------------------------------------------------------------------
 
     def run(self):
-        """线程主体：逐槽位 等确认 → 采集 → 推理 → 发信号。"""
+        """线程主体：逐槽位移动拍照 → 全部照片统一推理 → 发信号。"""
         logger.info(
-            "========== 实时识别开始，共 %d 个槽位，模式=%s，顺序=%s ==========",
+            "========== 实时检测开始，共 %d 个槽位，模式=%s，顺序=%s，静止等待=%dms ==========",
             len(self.slot_order),
             self.mode,
             [self._display_slot_number(index) for index in self.slot_order],
+            self.capture_settle_ms,
         )
 
+        captured_frames = []
         for order_pos, slot_index in enumerate(self.slot_order):
             if self._stop_flag or not self._wait_if_paused():
                 break
 
-            # 非首个槽位：等待 UI 自动移动到新槽位并确认
+            # 非首个槽位：等待 UI 自动移动到新槽位并确认；首槽位由 UI 启动前移动到位。
             if order_pos > 0:
                 self._move_confirmed.clear()
                 self.request_move_confirm.emit(slot_index)
@@ -352,8 +310,19 @@ class LiveInspectionWorker(QThread):
                     break
 
             display_slot_no = self._display_slot_number(slot_index)
-            self.status_message.emit(f"正在识别槽位 {display_slot_no}...")
-            status, color, result = self._infer_slot_with_consensus(slot_index)
+            self.status_message.emit(f"正在拍摄槽位 {display_slot_no}...")
+            captured_frames.append((slot_index, self._capture_slot_frame(slot_index)))
+
+        if not self._stop_flag:
+            logger.info("========== 拍照完成，开始后台统一识别，共 %d 张 ==========", len(captured_frames))
+
+        for slot_index, source_frame in captured_frames:
+            if self._stop_flag or not self._wait_if_paused():
+                break
+
+            display_slot_no = self._display_slot_number(slot_index)
+            self.status_message.emit(f"正在后台识别槽位 {display_slot_no}...")
+            status, color, result = self._infer_captured_frame(slot_index, source_frame)
 
             if self._stop_flag:
                 break
@@ -369,7 +338,7 @@ class LiveInspectionWorker(QThread):
             )
             self.data_logger.save_slot_image(
                 display_slot_no,
-                result.pop("_slot_source_frame_bgr", None),
+                source_frame,
                 selected_chip_bbox=result.get("selected_chip_bbox"),
             )
 
@@ -380,5 +349,5 @@ class LiveInspectionWorker(QThread):
                 display_slot_no, status, texts, angle,
             )
 
-        logger.info("========== 实时识别完成 ==========")
+        logger.info("========== 实时检测完成 ==========")
         self.all_done.emit()
